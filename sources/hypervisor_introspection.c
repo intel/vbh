@@ -5,6 +5,8 @@
 #include "vmx_common.h"
 #include "offsets.h"
 
+#define __SUCCESS(x)                            (x) >= 0
+
 //hv_event_callback global_event_callback;
 struct hvi_event_callback global_event_callbacks[max_event];
 
@@ -33,6 +35,9 @@ extern int get_cs_ring(int vcpu, unsigned char* param, unsigned char* buffer, in
 extern int get_seg_registers_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
 
 extern void* get_vcpu(void);
+
+extern int vmx_switch_to_nonroot(void);
+extern bool check_vbh_status(void);
 
 static int (*hvi_ept_violation_callback)(unsigned long long gpa, unsigned long long gla, int* allow);
 
@@ -270,7 +275,6 @@ int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask, unsigned char 
 }
 EXPORT_SYMBOL(hvi_modify_cr_write_exit);
 
-
 /*
  *Inject a #PF in guest.
  **/
@@ -278,7 +282,6 @@ int hvi_force_guest_page_fault(unsigned long virtual_addr, unsigned long error)
 {
     return -1;
 }
-
 
 /*
  *Enable mtf.*/
@@ -296,7 +299,6 @@ int hvi_enable_mtf(void)
     return 0;
 }
 EXPORT_SYMBOL(hvi_enable_mtf);
-
 
 /*
  *Disable mtf.
@@ -353,4 +355,25 @@ int hvi_unregister_event_callback(hv_event_e event)
 	return 0;
 }
 EXPORT_SYMBOL(hvi_unregister_event_callback);
+
+/*
+ *Switch to nonroot mode.
+ **/
+int hvi_switch_to_nonroot(void)
+{
+	if (__SUCCESS(vmx_switch_to_nonroot()))
+		return 0;
+	
+	return -1;
+}
+EXPORT_SYMBOL(hvi_switch_to_nonroot);
+
+/*
+ *Check whether vbh is loaded or not.
+ **/
+int hvi_is_vbh_loaded(void)
+{
+	return check_vbh_status();
+}
+EXPORT_SYMBOL(hvi_is_vbh_loaded);
 

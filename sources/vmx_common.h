@@ -1,5 +1,6 @@
-#include <linux/percpu-defs.h>
+#include <linux/percpu.h>
 #include <asm/vmx.h>
+#include "offsets.h"
 
 typedef enum {
 	CPU_REG_CR0 = 0,
@@ -65,6 +66,10 @@ struct vcpu_vmx {
 	bool instruction_skipped;
 	bool skip_instruction_not_used;
 };
+
+extern struct vcpu_vmx __percpu* vcpu;
+DECLARE_PER_CPU(unsigned long[NR_VCPU_REGS], reg_scratch);
+extern unsigned long *vmx_eptp_pml4;
 
 struct vmcs_config {
 	int size;

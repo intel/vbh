@@ -254,3 +254,13 @@ int hvi_register_event_callback(struct hvi_event_callback hvi_event_handlers[], 
  *Un-register event report call back
  **/
 int hvi_unregister_event_callback(hv_event_e event);
+
+/*
+ *Switch to nonroot mode.
+ **/
+int hvi_switch_to_nonroot(void);
+
+/*
+ *Check whether vbh is loaded or not.
+ **/
+int hvi_is_vbh_loaded(void);
