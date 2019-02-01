@@ -48,6 +48,12 @@ static struct vmcs_config __percpu* vmcs_config;
 
 static struct vcpu_vmx __percpu* vcpu; 
 
+static struct vmx_capability
+{
+	u32 ept;
+	u32 vpid;
+}vmx_capability;
+
 static int vmxon_success;
 	
 static struct desc_ptr __percpu* host_gdt;
@@ -95,9 +101,17 @@ void vmx_switch_skip_instruction(void);
 
 void get_guest_cr(unsigned int cr, unsigned long *mask, unsigned long *value);
 
+void cpu_switch_flush_tlb_smp(void);
+
 static void set_msr_state(void);
 
 static noinline void load_guest_state_registers(void);
+
+static void cpu_has_vmx_invept_capabilities(bool *context, bool* global);
+
+static void cpu_switch_flush_tlb(void* info);
+
+static inline void cpu_switch_invept(int ext, u64 eptp, u64 gpa);
 
 static inline unsigned long _read_cr3(void);
 
@@ -107,9 +121,9 @@ static bool is_invpcid_supported(void);
 
 extern int hvi_invoke_ept_violation_handler(unsigned long long gpa, unsigned long long gla, int* allow);
 
-extern void hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value);
+extern void hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value, int* allow);
 
-extern void hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value);
+extern void hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value, int* allow);
 
 extern void hvi_handle_event_vmcall(void);
 
@@ -163,6 +177,49 @@ static inline unsigned long _read_cr3(void)
 	return cr3;
 }
 
+static void cpu_has_vmx_invept_capabilities(bool *context, bool* global)
+{
+	if (vmx_capability.ept == 0 && vmx_capability.vpid == 0)
+		rdmsr(MSR_IA32_VMX_EPT_VPID_CAP, vmx_capability.ept, vmx_capability.vpid);
+	
+	*context = vmx_capability.ept & VMX_EPT_EXTENT_CONTEXT_BIT;
+	
+	*global = vmx_capability.ept & VMX_EPT_EXTENT_GLOBAL_BIT;
+}
+
+static inline void cpu_switch_invept(int ext, u64 eptp, u64 gpa)
+{
+	struct
+	{
+		u64 eptp, gpa;
+	}operand = { eptp, gpa };
+
+	printk(KERN_ERR "<1> cpu_switch_invept: ext=%d, eptp=0x%llx, gpa=0x%llx", ext, eptp, gpa);
+
+	asm volatile(__ex(ASM_VMX_INVEPT)
+		: 
+		: "a" (&operand), "c" (ext) 
+		: "cc", "memory"
+	);
+}
+
+static void cpu_switch_flush_tlb(void* info)
+{
+	bool global, context;
+
+	cpu_has_vmx_invept_capabilities(&context, &global);
+	
+	if (global)
+		cpu_switch_invept(VMX_EPT_EXTENT_GLOBAL, 0, 0);
+	else if (context)
+		cpu_switch_invept(VMX_EPT_EXTENT_CONTEXT, __pa(vmx_eptp_pml4), 0);
+	else
+	{
+		printk(KERN_ERR "<1> ERROR:  Unsupported EPT EXTENT!!!!\n");
+	}
+
+}
+
 static void vmxon_setup_revid(void* vmxon_region) 
 {
 	u32 rev_id = 0;
@@ -213,14 +270,16 @@ static inline void cpu_vmxoff(void)
 
 static u64 construct_eptp(unsigned long root_hpa)
 {
-	u64 eptp = 0, vmx_cap;
+	u64 eptp = 0;
 
-	rdmsrl(MSR_IA32_VMX_EPT_VPID_CAP, vmx_cap);
+	rdmsr(MSR_IA32_VMX_EPT_VPID_CAP, vmx_capability.ept, vmx_capability.vpid); 
 	
-	if (vmx_cap & VMX_EPT_PAGE_WALK_4_BIT)
+	printk(KERN_ERR "<1> vmx_capability.ept=0x%x, vmx_capability.vpid=0x%x\n", vmx_capability.ept, vmx_capability.vpid);
+	
+	if (vmx_capability.ept & VMX_EPT_PAGE_WALK_4_BIT)
 		eptp = VMX_EPTP_PWL_4;
 	
-	if (vmx_cap & VMX_EPTP_WB_BIT)
+	if (vmx_capability.ept & VMX_EPTP_WB_BIT)
 		eptp |= VMX_EPTP_MT_WB;
 
 	eptp |= (root_hpa & PAGE_MASK);
@@ -389,6 +448,11 @@ void handle_cpuid (struct vcpu_vmx *vcpu)
 	skip_emulated_instruction(vcpu);
 }
 
+void cpu_switch_flush_tlb_smp(void)
+{
+	//cpu_switch_flush_tlb(NULL);
+	on_each_cpu(cpu_switch_flush_tlb, NULL, 0);
+}
 
 #define CPU_MONITOR_HYPERCALL 40
 void handle_cpu_monitor (u64 hypercall_id, u64 params)
@@ -397,7 +461,8 @@ void handle_cpu_monitor (u64 hypercall_id, u64 params)
 	printk (KERN_ERR "vmx-root: VMCALL called for setting crx monitoring\n");	
 }
 
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute);
+extern int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute, int invalidate);
+
 void handle_ept_violation(struct vcpu_vmx *vcpu)
 {
 	unsigned long exit_qual = vmcs_readl(EXIT_QUALIFICATION);
@@ -431,7 +496,7 @@ void handle_ept_violation(struct vcpu_vmx *vcpu)
 
 	show_stack(NULL, (unsigned long*)g_rsp);
 	
-	status = hvi_set_ept_page_protection(gpa, 1, 1, 1);
+	status = hvi_set_ept_page_protection(gpa, 1, 1, 1, 1);
 
     //skip_emulated_instruction(vcpu);
 }
@@ -483,6 +548,7 @@ void handle_write_msr(struct vcpu_vmx *vcpu)
 	u32 low, high, new_low, new_high;
 	unsigned long old_value, new_value;
 	unsigned long msr;
+	int allow = 0;
 	
 	// msr should be in rcx
 	msr = vcpu->regs[VCPU_REGS_RCX];
@@ -499,10 +565,11 @@ void handle_write_msr(struct vcpu_vmx *vcpu)
 	// Debug only
 	printk(KERN_ERR "<1>handle_write_msr: Update msr 0x%lx: old_value=0x%lx, new_value=0x%lx\n", msr, old_value, new_value);
 		
-	hvi_handle_event_msr(msr, old_value, new_value);
+	hvi_handle_event_msr(msr, old_value, new_value, &allow);
 	
-	// TODO: hvi decides whether wrmsr is permitted or not.
-	//wrmsr(msr, new_low, new_high);
+	// hvi decides whether wrmsr is permitted or not.
+	if (allow)
+		wrmsr(msr, new_low, new_high);
 	
 	vmx_switch_skip_instruction();
 }
@@ -519,11 +586,13 @@ void handle_cr(struct vcpu_vmx *vcpu)
 	int type;
 	int reg;
 	unsigned long old_value;
+	
+	int allow = 0;
 				
 	exit_qual = vmcs_readl(EXIT_QUALIFICATION);
 	cr = exit_qual & 15;
 	type = (exit_qual >> 4)	& 3;
-	reg = (exit_qual >> 8) & 15;	
+	reg = (exit_qual >> 8) & 15;
 
 	switch (type) 
 	{
@@ -531,31 +600,34 @@ void handle_cr(struct vcpu_vmx *vcpu)
 			switch (cr) 
 			{
 				case CR0:
+					allow = 0;
 					old_value = vmcs_readl(GUEST_CR0);
 
 					val = vcpu->regs[reg];
 				
 					printk(KERN_ERR "EXIT on cr0 access: old value %lx, new value %lx", old_value, val);
-					
-					// write the new value to shadow register
-					vmcs_writel(CR0_READ_SHADOW, val);
+									
+					hvi_handle_event_cr(cr, old_value, val, &allow);
 				
-					hvi_handle_event_cr(cr, old_value, val);			
+					// write the new value to shadow register
+					if (allow)					
+						vmcs_writel(CR0_READ_SHADOW, val);
 				
 					// skip next instruction
 					post_handle_vmexit_mov_to_cr();
 					break; // CR0				
 				case CR4 :
+					allow = 0;
 					old_value = vmcs_readl(GUEST_CR4);
 				
 					val = vcpu->regs[reg];
 				
 					printk(KERN_ERR "EXIT on cr4 access: old value %lx, new value %lx", old_value, val);
-					
+													
+					hvi_handle_event_cr(cr, old_value, val, &allow);
 					// write the new value to shadow register
-					vmcs_writel(CR4_READ_SHADOW, val);
-				
-					hvi_handle_event_cr(cr, old_value, val);			
+					if(allow)
+						vmcs_writel(CR4_READ_SHADOW, val);			
 				
 					// skip next instruction
 					post_handle_vmexit_mov_to_cr();				
@@ -1417,7 +1489,10 @@ static int __init nonroot_switch_init(void)
 		
 	host_gdt = alloc_percpu(struct desc_ptr);
 	if (host_gdt == NULL)
-		printk(KERN_ERR "Cannot allocate memory for host_gdt\n");		
+	{
+		printk(KERN_ERR "Cannot allocate memory for host_gdt\n");
+		return ENOMEM;
+	}				
 	
 	vmcs_config = alloc_percpu(struct vmcs_config);
 	if (vmcs_config == NULL)
@@ -1442,10 +1517,10 @@ static int __init nonroot_switch_init(void)
     setup_ept_tables();
 
 	hvi_configure_kernel_code_protection();
-
+	
 	if (switch_on_load)
 		vmx_switch_to_nonroot();
-
+	
 err:
 	return 0;
 }

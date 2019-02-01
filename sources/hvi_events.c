@@ -2,13 +2,15 @@
 
 #include "hypervisor_introspection.h"
 
-extern hv_event_callback global_event_callback;
+extern struct hvi_event_callback global_event_callbacks[];
 
-void hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value);
+int hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value, int* allow);
+int hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value, int* allow);
+int hvi_handle_event_vmcall(void);
 
-int hvi_report_event(hv_event_e event, void* data, int size);
+static int hvi_report_event(hv_event_e event, void* data, int size, int *allow);
 
-void hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value)
+int hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value, int *allow)
 {
 	struct hvi_event_cr cr_event;
 	
@@ -18,10 +20,10 @@ void hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_va
 	
 	cr_event.new_value = new_value;
 	
-	hvi_report_event(cr_write, (void*)&cr_event, sizeof(struct hvi_event_cr));
+	return hvi_report_event(cr_write, (void*)&cr_event, sizeof(struct hvi_event_cr), allow);
 }
 
-void hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value)
+int hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value, int* allow)
 {
 	struct hvi_event_msr msr_event;
 	
@@ -31,19 +33,21 @@ void hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value)
 	
 	msr_event.new_value = new_value;
 	
-	hvi_report_event(msr_write, (void*)&msr_event, sizeof(struct hvi_event_msr));
+	return hvi_report_event(msr_write, (void*)&msr_event, sizeof(struct hvi_event_msr), allow);
 }
 
-void hvi_handle_event_vmcall(void)
+int hvi_handle_event_vmcall(void)
 {
-	hvi_report_event(vmcall, NULL, 0);
+	int allow;
+	
+	return hvi_report_event(vmcall, NULL, 0, &allow);
 }
 
-int hvi_report_event(hv_event_e event, void* data, int size)
+static int hvi_report_event(hv_event_e event, void* data, int size, int *allow)
 {
-	if (global_event_callback != NULL)
+	if (global_event_callbacks[event].callback != NULL)
 	{
-		global_event_callback(event, (unsigned char*)data, size);
+		global_event_callbacks[event].callback(event, (unsigned char*)data, size, allow);
 		return 0;
 	}
 		

@@ -14,7 +14,7 @@
 
 MODULE_LICENSE("Proprietary");
 
-static hv_event_callback dummy_event_handler;
+static struct hvi_event_callback dummy_event_handlers[1];
 
 struct x86_dtable expected_idt;
 
@@ -303,7 +303,7 @@ static void get_register_state_test(void)
 	assert(expected_regs.dr7 == actual.dr7);		
 }
 
-static int qgi_test_event_handler(hv_event_e type, unsigned char* data, int size)
+static int qgi_test_event_handler(hv_event_e type, unsigned char* data, int size, int* allow)
 {
 	// test get_msr returns correct value
 	get_msr_test();
@@ -455,9 +455,10 @@ static int __init query_shared_info_tests_init(void)
 	set_expected_values();
 	
 	// Register a callback function
-	dummy_event_handler = qgi_test_event_handler;
+	dummy_event_handlers[0].callback = qgi_test_event_handler;
+	dummy_event_handlers[0].event = vmcall;
 	
-	hvi_register_event_callback(dummy_event_handler);
+	hvi_register_event_callback(dummy_event_handlers, sizeof(dummy_event_handlers)/sizeof(struct hvi_event_callback));
 	
 	// issue vmcall to enter vmm for testing
 	asm_make_vmcall(0, NULL);
@@ -470,8 +471,9 @@ static int __init query_shared_info_tests_init(void)
 
 static void __exit query_shared_info_tests_exit(void)
 {
-	if(dummy_event_handler != NULL)
-		hvi_unregister_event_callback();
+	int i;
+	for(i=0; i<sizeof(dummy_event_handlers)/sizeof(struct hvi_event_callback); i++)
+		hvi_unregister_event_callback(dummy_event_handlers[i].event);
 	
 	printk("query_shared_info_tests: Goodbye, world!\n");
 }

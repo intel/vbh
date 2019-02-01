@@ -32,7 +32,7 @@ static int set_kcode_protection(struct resource *target)
 
 	for (addr = g_kcode_paddr_start; (addr+PAGE_SIZE) < g_kcode_paddr_end; addr += PAGE_SIZE)
 	{
-		status = hvi_set_ept_page_protection(addr, read, write, execute);
+		status = hvi_set_ept_page_protection(addr, read, write, execute, 0);
 		printk(KERN_ERR "Set policy on addr->0x%llx: read=%d, write=%d, execute=%d.\n", addr, read, write, execute);
 	}
 	
@@ -86,7 +86,7 @@ int hvi_configure_kernel_code_protection(void)
 {
 	struct resource *target;
 	
-	int status;
+	int status = -1;
 	
 	if (__SUCCESS(get_resource_by_name(KERNEL_CODE, &target)))
 	{

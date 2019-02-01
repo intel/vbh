@@ -14,7 +14,7 @@ MODULE_LICENSE("Proprietary");
 
 #define CHECK_BIT_IS_SET(var,pos) (((var) & (1<<(pos))) >> pos)
 
-static hv_event_callback dummy_event_handler;
+static struct hvi_event_callback dummy_event_handlers[1];
 
 static unsigned long rip;
 
@@ -33,8 +33,9 @@ static long get_rflag(void)
 	return flag;
 }
 
-static int set_register_rflags_test_event_handler(hv_event_e type, unsigned char *data, int size)
+static int set_register_rflags_test_event_handler(hv_event_e type, unsigned char *data, int size, int* allow)
 {
+#if 0
 	unsigned long rflags, new_rflags;
 	
 	// first read guest's rflags
@@ -53,11 +54,11 @@ static int set_register_rflags_test_event_handler(hv_event_e type, unsigned char
 	{
 		assert(0);
 	}
-	
+#endif
 	return 0;
 }
 
-static int set_register_rip_test_event_handler(hv_event_e type, unsigned char *data, int size)
+static int set_register_rip_test_event_handler(hv_event_e type, unsigned char *data, int size, int* allow)
 {	
 	 rip -= 4;
 	
@@ -73,9 +74,10 @@ static void run_set_rip_test(void)
 	int actual = 100;
 
 	// Register a callback function
-	dummy_event_handler = set_register_rip_test_event_handler;
+	dummy_event_handlers[0].callback = set_register_rip_test_event_handler;
+	dummy_event_handlers[0].event = vmcall;
 		
-	hvi_register_event_callback(dummy_event_handler);
+	hvi_register_event_callback(dummy_event_handlers, sizeof(dummy_event_handlers)/sizeof(struct hvi_event_callback));
 	
 	asm("lea Done, %0\n\t"
 		:"=r"(rip));
@@ -94,7 +96,7 @@ static void run_set_rip_test(void)
 
 	assert(expected == actual);
 	
-	hvi_unregister_event_callback();
+	hvi_unregister_event_callback(vmcall);
 }
 
 static void run_set_rflags_test(void)
@@ -102,9 +104,10 @@ static void run_set_rflags_test(void)
 	unsigned long rflags;
 
 	// Register a callback function
-	dummy_event_handler = set_register_rflags_test_event_handler;
+	dummy_event_handlers[0].callback = set_register_rflags_test_event_handler;
+	dummy_event_handlers[0].event = vmcall ;
 	
-	hvi_register_event_callback(dummy_event_handler);
+	hvi_register_event_callback(dummy_event_handlers, sizeof(dummy_event_handlers)/sizeof(struct hvi_event_callback));
 	
 	// issue vmcall to enter vmm for testing
 	asm_make_vmcall(0, NULL);	
@@ -115,7 +118,7 @@ static void run_set_rflags_test(void)
 
 	printk("set_rflags_test: Success.\n");
 	
-	hvi_unregister_event_callback();
+	hvi_unregister_event_callback(vmcall);
 }
 
 static int __init set_guest_info_test_module_init(void)

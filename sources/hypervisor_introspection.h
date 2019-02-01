@@ -154,20 +154,27 @@ typedef enum
 
 typedef enum
 {
-	ept_violation = 1,
-	msr_write = 2,
-	cr_write,
-	xsetbv_modification,
-	xcr_modification,
-	breakpoint,
-	vmcall,
-	mtf_exit
+	ept_violation = 0,
+	msr_write = 1,
+	cr_write =2 ,
+	xsetbv_modification = 3,
+	xcr_modification = 4,
+	breakpoint = 5,
+	vmcall = 6,
+	mtf_exit = 7,
+	max_event = 8
 }hv_event_e;
 
 /*
  *Prototype for event report callback function.
  **/
-typedef int (*hv_event_callback)(hv_event_e type, unsigned char* data, int size);
+typedef int (*hv_event_callback)(hv_event_e type, unsigned char* data, int size, int* allow);
+
+struct hvi_event_callback
+{
+	hv_event_e event;
+	hv_event_callback callback;
+};
 
 /*
  *Query specific guest information.
@@ -212,7 +219,7 @@ int hvi_get_ept_page_protection(unsigned long addr, unsigned char *read, unsigne
 /*
  *Modify the EPT access rights for the indicated GPA address.
  **/
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute);
+int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute, int invalidate);
 
 /*
  *Modify whether write msr causes vmexit.
@@ -236,14 +243,14 @@ int hvi_enable_mtf(void);
 /*
  *Disable mtf.
  **/
-int hvi_disable_mtf(void);
+int hvi_disable_mtf(void);  
 
 /*
  *Register event report call back
  **/
-int hvi_register_event_callback(hv_event_callback hvi_event_handler);
+int hvi_register_event_callback(struct hvi_event_callback hvi_event_handlers[], size_t num_handlers);
 
 /*
  *Un-register event report call back
  **/
-int hvi_unregister_event_callback(void);
+int hvi_unregister_event_callback(hv_event_e event);

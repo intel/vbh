@@ -16,13 +16,27 @@
 #define PTE_MEM_TYPE_WB 0x30
 #define EPT_PTE_LARGE_PAGE (1 << 7)
 
+static void set_ept_protection(void);
+
 extern unsigned long *vmx_eptp_pml4;
+
+unsigned long* get_ept_entry(u64 gpa);
+
+void set_ept_entry_prot(unsigned long* entry, int read, int write, int execute);
+
+static void set_ept_protection(void)
+{		
+	unsigned long *ept;
+	
+	// protect ept itself from any access or modifcation (rwx=0)
+	ept = get_ept_entry(__pa(vmx_eptp_pml4));
+	set_ept_entry_prot(ept, 0, 0, 0);
+}
 
 unsigned long level_to_pages (unsigned long level)
 {
 	return (1 << (level-1)*EPT_LEVEL_STRIDE);
 }
-
 
 int pfn_level_offset(unsigned long pfn, unsigned long level)
 {
@@ -81,6 +95,10 @@ unsigned long *pte_for_address(unsigned long pfn, unsigned long *target_level)
 		level--;
 		parent = phys_to_virt(pte_table_addr(*pte));
 	}
+	
+	// protect ept itself.
+	set_ept_protection();
+	
 	return pte;
 }
 
@@ -105,10 +123,10 @@ int build_pte_guest_phys_addr(unsigned long start_pfn, long nr_pages)
 				pages = level_to_pages(level);
 		}
 	    
-		//Todo: Add EPT memory type
-		*pte = pteval | (start_pfn << EPT_PAGE_SHIFT) | PTE_MEM_TYPE_WB | PTE_READ | PTE_WRITE | PTE_EXECUTE;
+	    //Todo: Add EPT memory type
+	    *pte = pteval | (start_pfn << EPT_PAGE_SHIFT) | PTE_MEM_TYPE_WB | PTE_READ | PTE_WRITE | PTE_EXECUTE;		
 		nr_pages -= pages;
-				start_pfn += pages;
+		start_pfn += pages;
     }
 	
     return 0;

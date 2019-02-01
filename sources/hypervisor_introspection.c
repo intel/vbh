@@ -5,7 +5,8 @@
 #include "vmx_common.h"
 #include "offsets.h"
 
-hv_event_callback global_event_callback;
+//hv_event_callback global_event_callback;
+struct hvi_event_callback global_event_callbacks[max_event];
 
 // todo: move this into a header file
 unsigned long* get_ept_entry (unsigned long long gpa);
@@ -16,6 +17,8 @@ int get_ept_entry_prot(unsigned long entry);
 extern void handle_cr_monitor_req(cpu_control_params_t* cpu_param);
 
 extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
+
+extern void cpu_switch_flush_tlb_smp(void);
 
 // functions related to query guest info
 extern int get_register_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
@@ -216,7 +219,7 @@ EXPORT_SYMBOL(hvi_get_ept_page_protection);
 /*
  *Modify the EPT access rights for the indicated GPA address.
  **/
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute)
+int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute, int invalidate)
 {
     // todo: vcpus should be paused 
 
@@ -226,6 +229,9 @@ int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned
         return -1;
 
     set_ept_entry_prot(ept_entry, read, write, execute);
+	
+	if (invalidate)
+		cpu_switch_flush_tlb_smp();
 	
     return 0;
 }
@@ -313,24 +319,36 @@ EXPORT_SYMBOL(hvi_disable_mtf);
 /*
  *Register event report call back
  **/
-int hvi_register_event_callback(hv_event_callback hvi_event_handler)
+int hvi_register_event_callback(struct hvi_event_callback hvi_event_handlers[], size_t num_handlers)
 {
-	if (global_event_callback == NULL && hvi_event_handler != NULL)
+	int i = 0;
+	
+	if (num_handlers >= max_event)
+		return -1;
+	
+	for (i = 0; i < num_handlers; i++)
 	{
-		global_event_callback = hvi_event_handler;
-		return 0;
+		struct hvi_event_callback *handler = &hvi_event_handlers[i];
+		
+		if (handler->callback != NULL && handler->event < max_event)			
+			global_event_callbacks[handler->event].callback = handler->callback;
+		else
+		{
+			return -1;
+		}
 	}
-	return -1;
+
+	return 0;
 }
 EXPORT_SYMBOL(hvi_register_event_callback);
 
 /*
  *Un-register event report call back
  **/
-int hvi_unregister_event_callback(void)
+int hvi_unregister_event_callback(hv_event_e event)
 {
-	if (global_event_callback != NULL)
-		global_event_callback = NULL;
+	if (global_event_callbacks[event].callback != NULL)
+		global_event_callbacks[event].callback = NULL;
 	
 	return 0;
 }
