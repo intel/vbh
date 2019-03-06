@@ -9,6 +9,8 @@
 #include <linux/compiler.h>
 #include <linux/cpumask.h>
 #include <linux/sched.h>
+#include <linux/stop_machine.h>
+#include <linux/delay.h>
 
 #include <asm/cpufeature.h>
 #include <asm/cpufeatures.h>
@@ -75,6 +77,8 @@ extern void hvi_handle_event_msr(__u32 msr, __u64 old_value,
 				__u64 new_value, int *allow);
 
 extern void hvi_handle_event_vmcall(void);
+
+void handle_pause_vcpu_hypercall(struct vcpu_vmx *vcpu, u64 params);
 
 unsigned long *get_scratch_register(void)
 {
@@ -190,10 +194,13 @@ void handle_vmcall(struct vcpu_vmx *vcpu)
 	hypercall_id = vcpu->regs[VCPU_REGS_RAX];
 	params = vcpu->regs[VCPU_REGS_RBX];
 
-	printk(KERN_ERR "<1> handle_vmcall: hypercall_id = %llx, params = %p", hypercall_id, (void *)params);
+	printk(KERN_ERR "<1> handle_vmcall: hypercall_id = 0x%llx, params = %p", hypercall_id, (void *)params);
 	switch (hypercall_id) {
 	case KERNEL_HARDENING_HYPERCALL:
 		handle_kernel_hardening_hypercall(params);
+		break;
+	case PAUSE_VCPU_HYPERCALL:
+		handle_pause_vcpu_hypercall(vcpu, params);
 		break;
 	default:
 		hvi_handle_event_vmcall();
@@ -316,7 +323,7 @@ void vmx_switch_and_exit_handler (void)
 	u64 gpa;
 	int id = -1;
 
-	id = smp_processor_id();
+	id = get_cpu();
 
 	reg_area = per_cpu_ptr(reg_scratch, id);
 
@@ -378,6 +385,8 @@ void vmx_switch_and_exit_handler (void)
 	if (vcpu_ptr->instruction_skipped == true) {
 		vmcs_writel(GUEST_RIP, reg_area[VCPU_REGS_RIP]);
 	}
+	
+	put_cpu();
 }
 
 void vmx_switch_skip_instruction(void)
