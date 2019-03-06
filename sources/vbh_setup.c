@@ -65,7 +65,7 @@ static unsigned long *vmx_io_bitmap_a_switch;
 static unsigned long *vmx_io_bitmap_b_switch;
 unsigned long *vmx_msr_bitmap_switch;
 unsigned long *vmx_eptp_pml4;
-static bool __read_mostly switch_on_load = 0;
+static bool __read_mostly switch_on_load = 1;
 module_param_named(switch_vmx_on_load, switch_on_load, bool, 0444);
 MODULE_PARM_DESC(switch_vmx_on_load, "Switch to non root when module is load");
 
@@ -887,6 +887,7 @@ static int switch_to_nonroot_per_cpu(void *data)
 	printk(KERN_ERR "switch_to_nonroot_per_cpu: cpu <%d> Enter.\n", cpu);
 
 	vcpu_ptr = this_cpu_ptr(vcpu);
+	
 	vmcs_config_ptr = this_cpu_ptr(vmcs_config);
 
 	native_store_gdt(this_cpu_ptr(host_gdt));

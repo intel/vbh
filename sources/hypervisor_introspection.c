@@ -22,6 +22,10 @@ extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
 
 extern void cpu_switch_flush_tlb_smp(void);
 
+extern int pause_other_vcpus(void);
+
+extern int resume_other_vcpus(void);
+
 // functions related to query guest info
 extern int get_register_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
 extern int get_msr(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
@@ -175,16 +179,23 @@ EXPORT_SYMBOL(hvi_set_register_rip);
  **/
 int hvi_request_vcpu_pause(void)
 {
-    return -1;
+	int ret;
+	ret = pause_other_vcpus();
+	
+    return ret;
 }
+EXPORT_SYMBOL(hvi_request_vcpu_pause);
 
 /*
  *Resume paused vcpus.
  **/
 int hvi_request_vcpu_resume(void)
 {
-    return -1;
-}
+	int ret;
+	ret = resume_other_vcpus();
+	
+	return ret;
+}EXPORT_SYMBOL(hvi_request_vcpu_resume);
 
 /*
  *Map a guest physical adress inside the hvi address space.

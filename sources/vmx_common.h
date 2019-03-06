@@ -1,4 +1,6 @@
 #include <linux/percpu.h>
+#include <linux/semaphore.h>
+#include <linux/workqueue.h>
 #include <asm/vmx.h>
 #include "offsets.h"
 
@@ -17,7 +19,8 @@ typedef enum
 	MSR_REG_UNKNOWN
 }msr_reg_e;
 
-#define KERNEL_HARDENING_HYPERCALL 40
+#define KERNEL_HARDENING_HYPERCALL  40
+#define PAUSE_VCPU_HYPERCALL		60
 
 typedef enum {
 	CPU_MONITOR_REQ = 1,
@@ -58,11 +61,19 @@ struct vmcs {
 	char data[0];
 };
 
+struct pause_vcpu_work_data
+{
+	struct work_struct work;
+	int data;
+};
+
 struct vcpu_vmx {
 	struct vmcs *pcpu_vmcs;
 	struct vmcs *vmxarea;
 	u64 vcpu_stack;
 	unsigned long *regs;
+	struct pause_vcpu_work_data *pause_vcpu_work;			
+	struct workqueue_struct *pause_vcpu_wq;
 	bool instruction_skipped;
 	bool skip_instruction_not_used;
 };
@@ -203,4 +214,9 @@ static __always_inline void vmcs_write64(unsigned long field, u64 value)
 static __always_inline void vmcs_writel(unsigned long field, unsigned long value)
 {
 	__vmcs_writel(field, value);
+}
+
+static __always_inline void asm_pause_cpu(void)
+{
+	asm volatile("pause" ::: "memory");
 }
