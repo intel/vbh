@@ -219,7 +219,7 @@ int hvi_get_ept_page_protection(unsigned long addr, unsigned char *read, unsigne
 /*
  *Modify the EPT access rights for the indicated GPA address.
  **/
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute, int invalidate);
+int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute);
 
 /*
  *Modify whether write msr causes vmexit.

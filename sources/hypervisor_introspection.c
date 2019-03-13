@@ -37,6 +37,8 @@ extern int get_gpr_registers_state(int vcpu, unsigned char* param, unsigned char
 extern int get_cs_type(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
 extern int get_cs_ring(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
 extern int get_seg_registers_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
+extern void make_request(int request, int wait);
+extern void vbh_tlb_shootdown(void);
 
 extern void* get_vcpu(void);
 
@@ -235,21 +237,30 @@ EXPORT_SYMBOL(hvi_get_ept_page_protection);
 /*
  *Modify the EPT access rights for the indicated GPA address.
  **/
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute, int invalidate)
+int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute)
 {
-    // todo: vcpus should be paused 
+	unsigned long *ept_entry;
 
-    unsigned long *ept_entry = get_ept_entry(addr);
+	if (__SUCCESS(pause_other_vcpus()))
+	{
+		// update ept
+		ept_entry = get_ept_entry(addr);
 
-    if (NULL == ept_entry)
-        return -1;
+		if (NULL == ept_entry)
+			return -1;
 
-    set_ept_entry_prot(ept_entry, read, write, execute);
+		set_ept_entry_prot(ept_entry, read, write, execute);
+
+		// invept on this cpu
+		vbh_tlb_shootdown();
+		
+		// need to invept on every other cpu
+		make_request(VBH_REQ_INVEPT, true);
 	
-	if (invalidate)
-		cpu_switch_flush_tlb_smp();
+		return 0;		
+	}
 	
-    return 0;
+	return -1;
 }
 EXPORT_SYMBOL(hvi_set_ept_page_protection);
 
@@ -275,14 +286,24 @@ int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask, unsigned char 
 {
 	cpu_control_params_t cr_ctrl;
 	
-	cr_ctrl.enable = 1;
-	cr_ctrl.cpu_reg = cr;
+	// pause all vcpus
+	if (__SUCCESS(pause_other_vcpus()))
+	{
+		// update cr policy on this cpu
+		cr_ctrl.enable = is_enable;
+		cr_ctrl.cpu_reg = cr;
 	
-	cr_ctrl.mask = mask;
+		cr_ctrl.mask = mask;
 	
-	handle_cr_monitor_req(&cr_ctrl);
+		handle_cr_monitor_req(&cr_ctrl);	
+		
+		// make request to every other cpu
+		make_request(VBH_REQ_MODIFY_CR, true);
+		
+		return 0;
+	}
 	
-	return 0;
+	return -1;
 }
 EXPORT_SYMBOL(hvi_modify_cr_write_exit);
 

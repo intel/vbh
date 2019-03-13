@@ -61,11 +61,15 @@ void vmx_switch_skip_instruction(void);
 
 void cpu_switch_flush_tlb_smp(void);
 
+void vbh_tlb_shootdown(void);
+
+void vcpu_exit_request_handler(unsigned int request);
+
+static inline void vbh_invept(int ext, u64 eptp, u64 gpa);
+
 static void cpu_has_vmx_invept_capabilities(bool *context, bool *global);
 
-static void cpu_switch_flush_tlb(void *info);
-
-static inline void cpu_switch_invept(int ext, u64 eptp, u64 gpa);
+extern void asm_make_vmcall(unsigned int hypercall_id, void *params);
 
 extern int hvi_invoke_ept_violation_handler(unsigned long long gpa,
 			unsigned long long gla, int *allow);
@@ -76,9 +80,10 @@ extern void hvi_handle_event_cr(__u16 cr, unsigned long old_value,
 extern void hvi_handle_event_msr(__u32 msr, __u64 old_value,
 				__u64 new_value, int *allow);
 
+extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
+
 extern void hvi_handle_event_vmcall(void);
 
-void handle_pause_vcpu_hypercall(struct vcpu_vmx *vcpu, u64 params);
 
 unsigned long *get_scratch_register(void)
 {
@@ -102,7 +107,7 @@ static void cpu_has_vmx_invept_capabilities(bool *context, bool *global)
 	*global = vmx_cap.ept & VMX_EPT_EXTENT_GLOBAL_BIT;
 }
 
-static inline void cpu_switch_invept(int ext, u64 eptp, u64 gpa)
+static inline void vbh_invept(int ext, u64 eptp, u64 gpa)
 {
 	struct {
 		u64 eptp, gpa;
@@ -117,16 +122,16 @@ static inline void cpu_switch_invept(int ext, u64 eptp, u64 gpa)
 	);
 }
 
-static void cpu_switch_flush_tlb(void *info)
+void vbh_tlb_shootdown(void)
 {
 	bool global, context;
 
 	cpu_has_vmx_invept_capabilities(&context, &global);
 
 	if (global)
-		cpu_switch_invept(VMX_EPT_EXTENT_GLOBAL, 0, 0);
+		vbh_invept(VMX_EPT_EXTENT_GLOBAL, 0, 0);
 	else if (context)
-		cpu_switch_invept(VMX_EPT_EXTENT_CONTEXT, __pa(vmx_eptp_pml4), 0);
+		vbh_invept(VMX_EPT_EXTENT_CONTEXT, __pa(vmx_eptp_pml4), 0);
 	else
 		printk(KERN_ERR "<1> ERROR:  Unsupported EPT EXTENT!!!!\n");
 }
@@ -155,12 +160,6 @@ void handle_cpuid (struct vcpu_vmx *vcpu)
 	vcpu->regs[VCPU_REGS_RCX] = ecx;
 	vcpu->regs[VCPU_REGS_RDX] = edx;
 	skip_emulated_instruction(vcpu);
-}
-
-void cpu_switch_flush_tlb_smp(void)
-{
-	//cpu_switch_flush_tlb(NULL);
-	on_each_cpu(cpu_switch_flush_tlb, NULL, 0);
 }
 
 void handle_ept_violation(struct vcpu_vmx *vcpu)
@@ -199,8 +198,8 @@ void handle_vmcall(struct vcpu_vmx *vcpu)
 	case KERNEL_HARDENING_HYPERCALL:
 		handle_kernel_hardening_hypercall(params);
 		break;
-	case PAUSE_VCPU_HYPERCALL:
-		handle_pause_vcpu_hypercall(vcpu, params);
+	case VCPU_REQUEST_HYPERCALL:
+		handle_vcpu_request_hypercall(vcpu, params);
 		break;
 	default:
 		hvi_handle_event_vmcall();
@@ -313,6 +312,18 @@ void handle_cr(struct vcpu_vmx *vcpu)
 	default:
 		break;
 	}
+}
+
+void vcpu_exit_request_handler(unsigned int request)
+{
+	int cpu;
+	
+	cpu = smp_processor_id();
+
+	// use vmcall to enter root mode
+	asm_make_vmcall(request, NULL);
+	
+	printk(KERN_ERR "<1> CPU-[%d] vcpu_exit_request_handler is back to guest. \n", cpu);
 }
 
 void vmx_switch_and_exit_handler (void)
