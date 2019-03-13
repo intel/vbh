@@ -20,7 +20,7 @@ typedef enum
 }msr_reg_e;
 
 #define KERNEL_HARDENING_HYPERCALL  40
-#define PAUSE_VCPU_HYPERCALL		60
+#define VCPU_REQUEST_HYPERCALL		60
 
 typedef enum {
 	CPU_MONITOR_REQ = 1,
@@ -32,14 +32,14 @@ typedef struct {
 	cpu_reg_e cpu_reg;
 	bool enable;
 	unsigned long mask;
-	unsigned int vcpu;
+	//unsigned int vcpu;
 } cpu_control_params_t;
 
 typedef struct
 {
 	msr_reg_e msr_reg;
 	bool enable;
-	unsigned int vcpu;
+	//unsigned int vcpu;
 }msr_control_params_t;
 
 typedef struct
@@ -61,12 +61,6 @@ struct vmcs {
 	char data[0];
 };
 
-struct pause_vcpu_work_data
-{
-	struct work_struct work;
-	int data;
-};
-
 struct vcpu_vmx {
 	struct vmcs *pcpu_vmcs;
 	struct vmcs *vmxarea;
@@ -76,6 +70,9 @@ struct vcpu_vmx {
 	struct workqueue_struct *pause_vcpu_wq;
 	bool instruction_skipped;
 	bool skip_instruction_not_used;
+	DECLARE_BITMAP(vbh_requests, 16);
+	unsigned long vbh_req_new_value;	// used for new reg value
+	
 };
 
 extern struct vcpu_vmx __percpu* vcpu;
@@ -136,6 +133,15 @@ struct vmcs_config {
 #define OSXSAVE BIT(18)
 #define SMEP BIT(20)
 #define SMAP BIT(21)
+
+/* vbh_req bitmask*/
+#define VBH_REQ_PAUSE		BIT(0)
+#define VBH_REQ_RESUME		BIT(1)
+#define VBH_REQ_SET_RFLAGS	BIT(2)
+#define VBH_REQ_SET_RIP		BIT(3)
+#define VBH_REQ_INVEPT		BIT(6)
+#define VBH_REQ_MODIFY_MSR	BIT(4)
+#define VBH_REQ_MODIFY_CR	BIT(5)
 
 void monitor_cpu_events(unsigned long mask, bool enable, cpu_reg_e reg);
 

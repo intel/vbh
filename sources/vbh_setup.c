@@ -1075,7 +1075,7 @@ static int __init cpu_switch_init(void)
 	memset(vmx_eptp_pml4, 0, PAGE_SIZE);
 
 	setup_ept_tables();
-
+	
 	if (switch_on_load)
 		vmx_switch_to_nonroot();
 
