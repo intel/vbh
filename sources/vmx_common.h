@@ -70,7 +70,7 @@ struct vcpu_vmx {
 	struct workqueue_struct *pause_vcpu_wq;
 	bool instruction_skipped;
 	bool skip_instruction_not_used;
-	DECLARE_BITMAP(vbh_requests, 16);
+	DECLARE_BITMAP(vbh_requests, 16);	// bitmap for all requests on a vcpu
 	unsigned long vbh_req_new_value;	// used for new reg value
 	
 };
@@ -78,6 +78,10 @@ struct vcpu_vmx {
 extern struct vcpu_vmx __percpu* vcpu;
 DECLARE_PER_CPU(unsigned long[NR_VCPU_REGS], reg_scratch);
 extern unsigned long *vmx_eptp_pml4;
+
+extern cpu_control_params_t cr_ctrl;
+extern msr_control_params_t msr_ctrl;
+
 
 struct vmcs_config {
 	int size;

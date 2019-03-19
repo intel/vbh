@@ -22,23 +22,35 @@ MODULE_LICENSE("Proprietary");
 #define		NUM_CR4_WRITE				2
 #define		NUM_MSR_WRITE				1
 
-static int recv_cr0_write_event, recv_cr4_write_event, recv_msr_write_event;
+struct kh_test_data
+{
+	int recv_cr0_write_event;
+	int recv_cr4_write_event;
+	int recv_msr_write_event;
+	long old_cr0_val;
+	long new_cr0_val;
+	long restore_cr0_val;
+	long old_cr4_val;
+	long new_cr4_val;
+	long restore_cr4_val;
+	long old_msr_val;
+	long new_msr_val;
+	struct semaphore kh_test_sema;
+	
+	int should_allow_cr_write;
+	int should_allow_msr_write;
+};
 
-static long volatile old_cr0_val; 
-static long volatile new_cr0_val;
-static long volatile old_cr4_val;
-static long volatile new_cr4_val;
-static long volatile old_msr_val;
-static long volatile new_msr_val;
+static int done;
 
-static int should_allow_cr_write;
-static int should_allow_msr_write;
+static DEFINE_PER_CPU(struct kh_test_data, test_data);
 
-static struct semaphore kh_test_sema;
-
-struct task_struct* thread_ptr;
+static struct task_struct **test_threads;
 
 static struct hvi_event_callback dummy_event_handlers[NUM_EVENT_HANDLERS];
+
+static void setup_test(void);
+static void cleanup_test(void);
 
 static inline unsigned long read_cr4(void)
 {
@@ -49,92 +61,110 @@ static inline unsigned long read_cr4(void)
 	 return val;
 }
 
-static int worker_thread(void* data)
+static int do_test(void* data)
 {
-	u32 hi, lo;
+	u32 hi, lo;	
+	unsigned long val;	
+	int me;
+	struct kh_test_data *this;
 	
-	unsigned long val;
+	me = smp_processor_id();	
 	
-	down(&kh_test_sema);
+	this = &per_cpu(test_data, me);
+	
+	down(&this->kh_test_sema);
 		
-	printk(KERN_ERR "kernel_hardening_test_module: worker_thread thread unlocked!\n");
+	printk(KERN_ERR "[!TEST!]: CPU-[%d] test thread unlocked!\n", me);
 	
 	// TEST CASE #1: write to cr0 and disallow operation
-	old_cr0_val = read_cr0();
-	new_cr0_val = old_cr0_val & ~PG;
-	should_allow_cr_write = 0;	
-	printk(KERN_ERR "kernel_hardening_test_module: old_cr0_value = 0x%lx, new_cr0_value=0x%lx, allow=%d", old_cr0_val, new_cr0_val, should_allow_cr_write);
+	this->old_cr0_val = read_cr0();
+	this->new_cr0_val = this->old_cr0_val & ~PG;
+	this->should_allow_cr_write = 0;	
+	printk(KERN_ERR "[!TEST!]-1 on cpu-%d: old_cr0_value = 0x%lx, new_cr0_value=0x%lx, allow=%d", me, this->old_cr0_val, this->new_cr0_val, this->should_allow_cr_write);
 	
-	write_cr0(new_cr0_val);
+	write_cr0(this->new_cr0_val);
 	
 	// make sure new value is NOT written to the shadow register
 	val = read_cr0();		
-	assert(val == old_cr0_val);
+	assert(val == this->old_cr0_val);
 	
 	// TEST CASE #2: write to cr0 and allow operation
-	old_cr0_val = read_cr0();
-	new_cr0_val = old_cr0_val & ~PG;
-	should_allow_cr_write = 1;	
-	printk(KERN_ERR "kernel_hardening_test_module: old_cr0_value = 0x%lx, new_cr0_value=0x%lx, allow=%d", old_cr0_val, new_cr0_val, should_allow_cr_write);	
+	this->old_cr0_val = read_cr0();
+	this->new_cr0_val = this->old_cr0_val & ~PG;
+	this->should_allow_cr_write = 1;	
+	printk(KERN_ERR "[!TEST!]-2 on cpu-%d: old_cr0_value = 0x%lx, new_cr0_value=0x%lx, allow=%d", me, this->old_cr0_val, this->new_cr0_val, this->should_allow_cr_write);	
 	
-	write_cr0(new_cr0_val);
+	write_cr0(this->new_cr0_val);
 	
 	// make sure new value is written to the shadow register
 	val = read_cr0();		
-	assert(val == new_cr0_val);
+	assert(val == this->new_cr0_val);
+	
+	// restore
+	this->restore_cr0_val = this->old_cr0_val;
 	
 	// TEST CASE #3: write to cr4 and disallow operation
-	old_cr4_val = read_cr4();
-	new_cr4_val = old_cr4_val & ~SMEP;
-	should_allow_cr_write = 0;
-	printk(KERN_ERR "kernel_hardening_test_module: old_cr4_value = 0x%lx, new_cr4_value=0x%lx, allow=%d", old_cr4_val, new_cr4_val, should_allow_cr_write);
+	this->old_cr4_val = read_cr4();
+	this->new_cr4_val = this->old_cr4_val & ~SMEP;
+	this->should_allow_cr_write = 0;
+	printk(KERN_ERR "[!TEST!]-3 on cpu-%d: old_cr4_value = 0x%lx, new_cr4_value=0x%lx, allow=%d", me, this->old_cr4_val, this->new_cr4_val, this->should_allow_cr_write);
 	
-	__write_cr4(new_cr4_val);
+	__write_cr4(this->new_cr4_val);
 	
 	// make sure new value is NOT written to the shadow register
 	val = read_cr4();
-	assert(val == old_cr4_val);
+	assert(val == this->old_cr4_val);
 	
 	// TEST CASE #4: write to cr4 and allow operation
-	old_cr4_val = read_cr4();
-	new_cr4_val = old_cr4_val & ~SMEP;		
-	should_allow_cr_write = 1;
-	printk(KERN_ERR "kernel_hardening_test_module: old_cr4_value = 0x%lx, new_cr4_value=0x%lx, allow=%d", old_cr4_val, new_cr4_val, should_allow_cr_write);
+	this->old_cr4_val = read_cr4();
+	this->new_cr4_val = this->old_cr4_val & ~SMEP;		
+	this->should_allow_cr_write = 1;
+	printk(KERN_ERR "[!TEST!]-4 on cpu-%d: old_cr4_value = 0x%lx, new_cr4_value=0x%lx, allow=%d", me, this->old_cr4_val, this->new_cr4_val, this->should_allow_cr_write);
 	
-	__write_cr4(new_cr4_val);
+	__write_cr4(this->new_cr4_val);
 	
 	// make sure new value is written to the shadow register
 	val = read_cr4();
-	assert(val == new_cr4_val);
+	assert(val == this->new_cr4_val);
+	
+	// restor
+	this->restore_cr4_val = this->old_cr4_val;
 	
 	// TEST CASE #5: write to msr and disallow the operation
 	rdmsr(MSR_, lo, hi);
 		
-	old_msr_val = (u64)hi << 32 | lo;
+	this->old_msr_val = (u64)hi << 32 | lo;
 		
 	// try to flip the NXE bit - bit 11
-	new_msr_val = old_msr_val & ~(1 << 11);
-	should_allow_msr_write = 0;
-	printk(KERN_ERR "kernel_hardening_test_module: old_msr_value = 0x%lx, new_msr_value=0x%lx, allow=%d", old_msr_val, new_msr_val, should_allow_msr_write);
+	this->new_msr_val = this->old_msr_val & ~(1 << 11);
+	this->should_allow_msr_write = 0;
+	printk(KERN_ERR "[!TEST!]-5 on cpu-%d: old_msr_value = 0x%lx, new_msr_value=0x%lx, allow=%d", me, this->old_msr_val, this->new_msr_val, this->should_allow_msr_write);
 	
 	//wrmsr(MSR_, (u32)(new_msr_val >> 32), (u32)new_msr_val);
-	wrmsrl(MSR_, new_msr_val);
+	wrmsrl(MSR_, this->new_msr_val);
 
 	// Assert new msr value is ignored
 	rdmsr(MSR_, lo, hi);
 	
 	val = (u64)hi << 32 | lo;
 	
-	assert(val == old_msr_val);
+	assert(val == this->old_msr_val);
 	
-	printk(KERN_ERR "kernel_hardening_test_module: worker_thread thread stopping...\n");
+	printk(KERN_ERR "[!TEST!]: test_thread on cpu-%d stopped.\n", me);
 	
 	return 0;
 }
 
 static int kh_test_cr_write_event_handler(hv_event_e type, unsigned char* data, int size, int* allow)
 {
+	struct kh_test_data *this;
+	int cpu;
+	
 	struct hvi_event_cr *cr_event = (struct hvi_event_cr*)data;
+	
+	cpu = smp_processor_id();
+	
+	this = &per_cpu(test_data, cpu);
 	
 	assert(size == sizeof(struct hvi_event_cr));
 	
@@ -142,57 +172,59 @@ static int kh_test_cr_write_event_handler(hv_event_e type, unsigned char* data, 
 	
 	if (cr_event->cr == CR0)
 	{
-		assert(cr_event->old_value == old_cr0_val);
-		assert(cr_event->new_value == new_cr0_val);	
+		assert(cr_event->old_value == this->old_cr0_val);
+		assert(cr_event->new_value == this->new_cr0_val);	
 		
-		recv_cr0_write_event++;
+		this->recv_cr0_write_event++;
 	}
 	else if (cr_event->cr == CR4)
 	{
-		assert(cr_event->old_value == old_cr4_val);
-		assert(cr_event->new_value == new_cr4_val);		
+		assert(cr_event->old_value == this->old_cr4_val);
+		assert(cr_event->new_value == this->new_cr4_val);		
 		
-		recv_cr4_write_event++;
+		this->recv_cr4_write_event++;
 	}
 
-	*allow = should_allow_cr_write;
+	*allow = this->should_allow_cr_write;
 	
 	return 0;
 }
 
 static int kh_test_msr_write_event_handler(hv_event_e type, unsigned char* data, int size, int* allow)
 {
+	struct kh_test_data *this = &per_cpu(test_data, smp_processor_id());
+	
 	struct hvi_event_msr *msr_event = (struct hvi_event_msr*)data;
 	
 	assert(size == sizeof(struct hvi_event_msr));
 	
 	assert(msr_event->msr == MSR_);
 	
-	assert(msr_event->old_value == old_msr_val);
+	assert(msr_event->old_value == this->old_msr_val);
 	
-	assert(msr_event->new_value == new_msr_val);	
+	assert(msr_event->new_value == this->new_msr_val);	
 	
-	recv_msr_write_event++;
+	this->recv_msr_write_event++;
 	
-	*allow = should_allow_msr_write;
+	*allow = this->should_allow_msr_write;
 	
 	return 0;
 }
 
-static int kh_test_set_policy(void)
+static int kh_test_set_policy(int is_enable)
 {
 	int result = -1;
 	
 	// enable cr_write_exit policy on cr0
-	result = hvi_modify_cr_write_exit(CR0, PG, 1);
+	result = hvi_modify_cr_write_exit(CR0, PG, is_enable);
 	assert(result == SUCCESS);
 
 	// enable cr_write_exit policy on cr4
-	result = hvi_modify_cr_write_exit(CR4, SMEP, 1);
+	result = hvi_modify_cr_write_exit(CR4, SMEP, is_enable);
 	assert(result == SUCCESS);
 	
 	// enable msr_write_exit policy on msr
-	result = hvi_modify_msr_write_exit(MSR_, 1);
+	result = hvi_modify_msr_write_exit(MSR_, is_enable);
 	assert(result == SUCCESS);
 	
 	return 0;
@@ -200,17 +232,97 @@ static int kh_test_set_policy(void)
 
 static int kh_test_vmcall_event_handler(hv_event_e type, unsigned char* data, int size, int* allow)
 {
-	kh_test_set_policy();
+	int ret;
+
+	printk(KERN_ERR "[!TEST!]kh_test_vmcall_event_handler: set_policy.\n");
+	ret = hvi_request_vcpu_pause();
 	
+	assert(ret == SUCCESS);
+	
+	if (!done)
+		kh_test_set_policy(1);
+	else
+		kh_test_set_policy(0);
+
+	ret = hvi_request_vcpu_resume();
+		
+	assert(ret == SUCCESS);
+
 	return 0;
 }
 
-static int __init kernel_hardening_test_module_init(void)
-{	
+static void cleanup_test(void)
+{
+	int cpu;
+	struct kh_test_data *data_ptr;
 	
-	recv_cr0_write_event = 0;
-	recv_cr4_write_event = 0;
-	recv_msr_write_event = 0;
+	get_cpu();
+	
+	// unregister cr event handler so restoring cr value won't call into the event handler
+	hvi_unregister_event_callback(cr_write);
+	
+	for_each_online_cpu(cpu)
+	{
+		data_ptr = per_cpu_ptr(&test_data, cpu);
+		
+		write_cr0(data_ptr->restore_cr0_val);
+		
+		__write_cr4(data_ptr->restore_cr4_val);
+	}
+	
+	// unregister msr event handler
+	hvi_unregister_event_callback(msr_write);
+	
+	// reset policy
+	asm_make_vmcall(0, NULL);
+	
+	// unregister vmcall handler
+	hvi_unregister_event_callback(vmcall);
+	
+	put_cpu();
+}
+
+static void setup_test(void)
+{
+	int online_cpus, cpu;
+	struct task_struct *test_thread;
+	
+	struct kh_test_data *data_ptr;
+		
+	online_cpus = num_online_cpus();
+	
+	test_threads = kmalloc(sizeof(struct task_struct*) * online_cpus, GFP_KERNEL);
+	
+	for_each_online_cpu(cpu)
+	{
+		data_ptr = per_cpu_ptr(&test_data, cpu);
+		
+		sema_init(&data_ptr->kh_test_sema, 0);
+		
+		data_ptr->recv_cr0_write_event = 0;
+		data_ptr->recv_cr4_write_event = 0;
+		data_ptr->recv_msr_write_event = 0;
+		
+		test_thread = kthread_create(do_test, NULL, "kh-test-thread");
+		
+		test_threads[cpu] = test_thread;
+		
+		kthread_bind(test_thread, cpu);
+		
+		wake_up_process(test_thread);
+	}
+}
+
+static int __init kernel_hardening_test_module_init(void)
+{
+	int cpu;
+	
+	struct kh_test_data *data_ptr;
+	
+	done = 0;
+	
+	// setup tests: create all test threads
+	setup_test();
 	
 	// register a callback function
 	dummy_event_handlers[0].event = vmcall;
@@ -224,39 +336,42 @@ static int __init kernel_hardening_test_module_init(void)
 	
 	hvi_register_event_callback(dummy_event_handlers, sizeof(dummy_event_handlers)/sizeof(struct hvi_event_callback));
 	
-	sema_init(&kh_test_sema, 1);
-	
-	thread_ptr = kthread_create(worker_thread, NULL, "kh-test-worker-thread");
-	wake_up_process(thread_ptr);
-	
 	// vmcall to enter vmm so we can set policies
 	asm_make_vmcall(0, NULL);
 	
-	// signal worker kthread to continue
-	up(&kh_test_sema);
+	// signal test kthread to run test
+	for_each_online_cpu(cpu)
+	{
+		data_ptr = per_cpu_ptr(&test_data, cpu);
+		up(&data_ptr->kh_test_sema);
+	}
+
 
 	return 0;
 }
 
 static void __exit kernel_hardening_test_module_exit(void)
 {
-	int i;
-	assert(recv_cr0_write_event == NUM_CR0_WRITE);
-	assert(recv_cr4_write_event == NUM_CR4_WRITE);
-	assert(recv_msr_write_event == NUM_MSR_WRITE);
+	int cpu;
 	
-//	if (thread_ptr)
-//		kthread_stop(thread_ptr);
+	struct kh_test_data *data_ptr;
 	
-	printk(KERN_ERR "kernel_hardening_test_module: worker thread stopped.\n");
+	done = 1;
 	
-	for (i = 0; i < sizeof(dummy_event_handlers)/sizeof(struct hvi_event_callback); i++)
+	printk(KERN_ERR "[!TEST!]: kernel_hardening_test_module stopping...\n");
+	
+	for_each_online_cpu(cpu)
 	{
-		if (dummy_event_handlers[i].callback != NULL)
-			hvi_unregister_event_callback(dummy_event_handlers[i].event);
+		data_ptr = per_cpu_ptr(&test_data, cpu);
+		
+		assert(data_ptr->recv_cr0_write_event == NUM_CR0_WRITE);
+		assert(data_ptr->recv_cr4_write_event == NUM_CR4_WRITE);
+		assert(data_ptr->recv_msr_write_event == NUM_MSR_WRITE);
 	}
 	
-	printk(KERN_ERR "kernel_hardening_test_module: Goodbye, world!\n");
+	cleanup_test();
+	
+	printk(KERN_ERR "[!TEST!]: Goodbye, world!\n");
 }
 
 module_init(kernel_hardening_test_module_init);

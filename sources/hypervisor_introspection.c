@@ -7,6 +7,10 @@
 
 #define __SUCCESS(x)                            (x) >= 0
 
+static DEFINE_SPINLOCK(pause_lock);
+
+static int vcpus_locked;
+
 //hv_event_callback global_event_callback;
 struct hvi_event_callback global_event_callbacks[max_event];
 
@@ -37,6 +41,8 @@ extern int get_gpr_registers_state(int vcpu, unsigned char* param, unsigned char
 extern int get_cs_type(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
 extern int get_cs_ring(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
 extern int get_seg_registers_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
+extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
+extern inline int vcpus_paused(void);
 extern void make_request(int request, int wait);
 extern void vbh_tlb_shootdown(void);
 
@@ -182,6 +188,19 @@ EXPORT_SYMBOL(hvi_set_register_rip);
 int hvi_request_vcpu_pause(void)
 {
 	int ret;
+	
+	spin_lock(&pause_lock);
+	
+	if (vcpus_locked)
+	{
+		spin_unlock(&pause_lock);
+		return -1;
+	}
+	
+	vcpus_locked = 1;
+	
+	spin_unlock(&pause_lock);
+	
 	ret = pause_other_vcpus();
 	
     return ret;
@@ -196,6 +215,7 @@ int hvi_request_vcpu_resume(void)
 	int ret;
 	ret = resume_other_vcpus();
 	
+	vcpus_locked = 0;
 	return ret;
 }EXPORT_SYMBOL(hvi_request_vcpu_resume);
 
@@ -241,26 +261,24 @@ int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned
 {
 	unsigned long *ept_entry;
 
-	if (__SUCCESS(pause_other_vcpus()))
-	{
-		// update ept
-		ept_entry = get_ept_entry(addr);
+	if (!vcpus_paused())
+		return -1;
 
-		if (NULL == ept_entry)
-			return -1;
+	// update ept
+	ept_entry = get_ept_entry(addr);
 
-		set_ept_entry_prot(ept_entry, read, write, execute);
+	if (NULL == ept_entry)
+		return -1;
 
-		// invept on this cpu
-		vbh_tlb_shootdown();
+	set_ept_entry_prot(ept_entry, read, write, execute);
+
+	// invept on this cpu
+	vbh_tlb_shootdown();
 		
-		// need to invept on every other cpu
-		make_request(VBH_REQ_INVEPT, true);
+	// need to invept on every other cpu
+	make_request(VBH_REQ_INVEPT, true);
 	
-		return 0;		
-	}
-	
-	return -1;
+	return 0;		
 }
 EXPORT_SYMBOL(hvi_set_ept_page_protection);
 
@@ -269,12 +287,21 @@ EXPORT_SYMBOL(hvi_set_ept_page_protection);
  **/
 int hvi_modify_msr_write_exit(unsigned long msr, unsigned char is_enable)
 {
-	msr_control_params_t msr_ctrl;
+	if (!vcpus_paused())
+		return -1;
 	
+	// setup new policy
 	msr_ctrl.enable = is_enable;
+	
 	msr_ctrl.msr_reg = msr;
 
+	wmb();
+	
+	// update policy on this cpu
 	handle_msr_monitor_req(&msr_ctrl);
+	
+	// make request to other vcpus
+	make_request(VBH_REQ_MODIFY_MSR, true);
 
 	return 0;
 }EXPORT_SYMBOL(hvi_modify_msr_write_exit);
@@ -283,27 +310,26 @@ int hvi_modify_msr_write_exit(unsigned long msr, unsigned char is_enable)
  *Modify whether write indicated cr causes vmexit.
  **/
 int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask, unsigned char is_enable)
-{
-	cpu_control_params_t cr_ctrl;
+{	
+	if (!vcpus_paused())
+		return -1;
 	
-	// pause all vcpus
-	if (__SUCCESS(pause_other_vcpus()))
-	{
-		// update cr policy on this cpu
-		cr_ctrl.enable = is_enable;
-		cr_ctrl.cpu_reg = cr;
+	// setup policy
+	cr_ctrl.enable = is_enable;
+	cr_ctrl.cpu_reg = cr;
 	
-		cr_ctrl.mask = mask;
+	cr_ctrl.mask = mask;
 	
-		handle_cr_monitor_req(&cr_ctrl);	
-		
-		// make request to every other cpu
-		make_request(VBH_REQ_MODIFY_CR, true);
-		
-		return 0;
-	}
+	wmb();
 	
-	return -1;
+	// update cr policy on this cpu
+	handle_cr_monitor_req(&cr_ctrl);	
+	
+	// make request to every other cpu
+	make_request(VBH_REQ_MODIFY_CR, true);
+					
+	return 0;
+
 }
 EXPORT_SYMBOL(hvi_modify_cr_write_exit);
 
@@ -316,7 +342,8 @@ int hvi_force_guest_page_fault(unsigned long virtual_addr, unsigned long error)
 }
 
 /*
- *Enable mtf.*/
+ *Enable mtf.
+ **/
 int hvi_enable_mtf(void)
 {
 	u32 cpu_based_exec_ctrl;
@@ -356,6 +383,8 @@ EXPORT_SYMBOL(hvi_disable_mtf);
 int hvi_register_event_callback(struct hvi_event_callback hvi_event_handlers[], size_t num_handlers)
 {
 	int i = 0;
+	
+	vcpus_locked = 0;
 	
 	if (num_handlers >= max_event)
 		return -1;
