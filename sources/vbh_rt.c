@@ -274,6 +274,8 @@ void handle_cr(struct vcpu_vmx *vcpu)
 
 	int allow = 0;
 
+	int cpu = smp_processor_id();
+	
 	exit_qual = vmcs_readl(EXIT_QUALIFICATION);
 	cr = exit_qual & 15;
 	type = (exit_qual >> 4)	& 3;
@@ -286,11 +288,15 @@ void handle_cr(struct vcpu_vmx *vcpu)
 			allow = 0;
 			old_value = vmcs_readl(GUEST_CR0);
 			val = vcpu->regs[reg];
-			printk(KERN_ERR "EXIT on cr0 access: old value %lx, new value %lx", old_value, val);
+			printk(KERN_ERR "<1> cpu-%d EXIT on cr0 access: old value %lx, new value %lx", cpu, old_value, val);
+			
+			// report event
 			hvi_handle_event_cr(cr, old_value, val, &allow);
-			// write the new value to shadow register
+			
+			// write the new value to shadow register only if allowed
 			if (allow)
 				vmcs_writel(CR0_READ_SHADOW, val);
+			
 			// skip next instruction
 			post_handle_vmexit_mov_to_cr();
 			break; // CR0
@@ -298,11 +304,15 @@ void handle_cr(struct vcpu_vmx *vcpu)
 			allow = 0;
 			old_value = vmcs_readl(GUEST_CR4);
 			val = vcpu->regs[reg];
-			printk(KERN_ERR "EXIT on cr4 access: old value %lx, new value %lx", old_value, val);
+			printk(KERN_ERR "<1> cpu-%d EXIT on cr4 access: old value %lx, new value %lx", cpu, old_value, val);
+			
+			// report event
 			hvi_handle_event_cr(cr, old_value, val, &allow);
-			// write the new value to shadow register
+			
+			// write the new value to shadow register only if allowed
 			if (allow)
 				vmcs_writel(CR4_READ_SHADOW, val);
+			
 			// skip next instruction
 			post_handle_vmexit_mov_to_cr();
 			break;	// CR4
