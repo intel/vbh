@@ -9,8 +9,9 @@ extern void vmx_switch_skip_instruction(void);
 static void enable_msr_control(unsigned long msr, unsigned long* bitmap);
 static void disable_msr_control(unsigned long msr, unsigned long* bitmap);
 
-void vmx_switch_update_cr_mask (bool enable, unsigned long mask, unsigned long mask_reg, unsigned long guest_reg, unsigned long shadow_reg);
-void vmx_switch_update_msr_control(bool enable, unsigned long msr_reg, unsigned int type);
+static void vbh_update_cr_mask (bool enable, unsigned long mask, unsigned long mask_reg, unsigned long guest_reg, unsigned long shadow_reg);
+
+static void vbh_update_msr_control(bool enable, unsigned long msr_reg, unsigned int type);
 
 void handle_read_msr(struct vcpu_vmx *vcpu);
 void handle_write_msr(struct vcpu_vmx *vcpu);
@@ -25,10 +26,10 @@ void handle_cr_monitor_req(cpu_control_params_t* cpu_param)
 {
 	switch (cpu_param->cpu_reg) {
 		case CPU_REG_CR0:
-			vmx_switch_update_cr_mask(cpu_param->enable, cpu_param->mask, CR0_GUEST_HOST_MASK, GUEST_CR0, CR0_READ_SHADOW);
+			vbh_update_cr_mask(cpu_param->enable, cpu_param->mask, CR0_GUEST_HOST_MASK, GUEST_CR0, CR0_READ_SHADOW);
 			break;
 		case CPU_REG_CR4:
-			vmx_switch_update_cr_mask(cpu_param->enable, cpu_param->mask, CR4_GUEST_HOST_MASK, GUEST_CR4, CR4_READ_SHADOW);
+			vbh_update_cr_mask(cpu_param->enable, cpu_param->mask, CR4_GUEST_HOST_MASK, GUEST_CR4, CR4_READ_SHADOW);
 			break;
 		
 		default:
@@ -39,7 +40,7 @@ void handle_cr_monitor_req(cpu_control_params_t* cpu_param)
 void handle_msr_monitor_req(msr_control_params_t* msr_param)
 {
 	// TODO:  msr_write only?
-	vmx_switch_update_msr_control(msr_param->enable, msr_param->msr_reg, MSR_TYPE_W);		
+	vbh_update_msr_control(msr_param->enable, msr_param->msr_reg, MSR_TYPE_W);		
 }
 
 void handle_kernel_hardening_hypercall (u64 params)
@@ -59,39 +60,46 @@ void handle_kernel_hardening_hypercall (u64 params)
 	}
 }
 
-void vmx_switch_update_cr_mask(bool enable, unsigned long mask, unsigned long mask_reg, unsigned long guest_reg, unsigned long shadow_reg)
+void vbh_update_cr_mask(bool enable, unsigned long mask, unsigned long mask_reg, unsigned long guest_reg, unsigned long shadow_reg)
 {
 	unsigned long current_mask = vmcs_readl(mask_reg);
 	unsigned long guest_value = vmcs_readl(guest_reg);
 	
 	bool root_owned = false;
 
-	printk(KERN_ERR "vmx_switch_update_cr_mask called on %x\n", smp_processor_id());
+	printk(KERN_ERR "vbh_update_cr_mask called on cpu-%d\n", smp_processor_id());
 
 	if ((current_mask & mask) == mask) {
 		printk(KERN_ERR "mask %lx is already owned by vmx root", mask);
 		root_owned = true;
 	}
 
-	if (enable) {
-		if (!root_owned) {
-			printk(KERN_ERR "update_cr0_mask done successfully\n");
+	if (enable) 
+	{
+		if (!root_owned) 
+		{
+			printk(KERN_ERR "update_cr_mask on guest_reg=0x%lx done successfully.\n", guest_reg);
 			current_mask = current_mask | mask;
 			vmcs_writel(mask_reg, current_mask);
 			vmcs_writel(shadow_reg, guest_value);
 		}
 	}
-	else {
-		if (root_owned) {
+	else 
+	{
+		if (root_owned) 
+		{
+			printk(KERN_ERR "update_cr_mask on guest_reg=0x%lx root owned cr_mask is disabled.\n", guest_reg);
 			current_mask = current_mask & ~mask;
 			vmcs_writel(mask_reg, current_mask);
 		}
 	}	
 }
 
-void vmx_switch_update_msr_control(bool enable, unsigned long msr, unsigned int type)
-{	
+void vbh_update_msr_control(bool enable, unsigned long msr, unsigned int type)
+{		
 	int f = sizeof(unsigned long);		
+	
+	printk(KERN_ERR "<1>vbh_update_msr_control: enable=%d, msr=0x%lx, type=%d.\n", enable, msr, type);
 	
 	if (type == MSR_TYPE_R)
 	{
