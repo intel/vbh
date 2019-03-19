@@ -177,7 +177,7 @@ struct hvi_event_callback
 };
 
 /*
- *Query specific guest information.
+ *Query specific guest information. 
  **/
 int hvi_query_guest_info(int vcpu, hvi_query_info_e query_type, unsigned char* param, unsigned char* buffer, int* size);
 
@@ -219,7 +219,7 @@ int hvi_get_ept_page_protection(unsigned long addr, unsigned char *read, unsigne
 /*
  *Modify the EPT access rights for the indicated GPA address.
  **/
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute, int invalidate);
+int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute);
 
 /*
  *Modify whether write msr causes vmexit.
@@ -233,11 +233,13 @@ int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask, unsigned char 
 
 /*
  *Inject a #PF in guest.
+ *Only on current CPU.
  **/
 int hvi_force_guest_page_fault(unsigned long virtual_addr, unsigned long error);
 
 /*
- *Enable mtf.*/
+ *Enable mtf - Only on current vcpu
+ **/
 int hvi_enable_mtf(void);
 
 /*

@@ -1,4 +1,6 @@
 #include <linux/percpu.h>
+#include <linux/semaphore.h>
+#include <linux/workqueue.h>
 #include <asm/vmx.h>
 #include "offsets.h"
 
@@ -17,7 +19,8 @@ typedef enum
 	MSR_REG_UNKNOWN
 }msr_reg_e;
 
-#define KERNEL_HARDENING_HYPERCALL 40
+#define KERNEL_HARDENING_HYPERCALL  40
+#define VCPU_REQUEST_HYPERCALL		60
 
 typedef enum {
 	CPU_MONITOR_REQ = 1,
@@ -29,14 +32,14 @@ typedef struct {
 	cpu_reg_e cpu_reg;
 	bool enable;
 	unsigned long mask;
-	unsigned int vcpu;
+	//unsigned int vcpu;
 } cpu_control_params_t;
 
 typedef struct
 {
 	msr_reg_e msr_reg;
 	bool enable;
-	unsigned int vcpu;
+	//unsigned int vcpu;
 }msr_control_params_t;
 
 typedef struct
@@ -63,13 +66,22 @@ struct vcpu_vmx {
 	struct vmcs *vmxarea;
 	u64 vcpu_stack;
 	unsigned long *regs;
+	struct pause_vcpu_work_data *pause_vcpu_work;			
+	struct workqueue_struct *pause_vcpu_wq;
 	bool instruction_skipped;
 	bool skip_instruction_not_used;
+	DECLARE_BITMAP(vbh_requests, 16);	// bitmap for all requests on a vcpu
+	unsigned long vbh_req_new_value;	// used for new reg value
+	
 };
 
 extern struct vcpu_vmx __percpu* vcpu;
 DECLARE_PER_CPU(unsigned long[NR_VCPU_REGS], reg_scratch);
 extern unsigned long *vmx_eptp_pml4;
+
+extern cpu_control_params_t cr_ctrl;
+extern msr_control_params_t msr_ctrl;
+
 
 struct vmcs_config {
 	int size;
@@ -125,6 +137,15 @@ struct vmcs_config {
 #define OSXSAVE BIT(18)
 #define SMEP BIT(20)
 #define SMAP BIT(21)
+
+/* vbh_req bitmask*/
+#define VBH_REQ_PAUSE		BIT(0)
+#define VBH_REQ_RESUME		BIT(1)
+#define VBH_REQ_SET_RFLAGS	BIT(2)
+#define VBH_REQ_SET_RIP		BIT(3)
+#define VBH_REQ_INVEPT		BIT(6)
+#define VBH_REQ_MODIFY_MSR	BIT(4)
+#define VBH_REQ_MODIFY_CR	BIT(5)
 
 void monitor_cpu_events(unsigned long mask, bool enable, cpu_reg_e reg);
 
@@ -203,4 +224,9 @@ static __always_inline void vmcs_write64(unsigned long field, u64 value)
 static __always_inline void vmcs_writel(unsigned long field, unsigned long value)
 {
 	__vmcs_writel(field, value);
+}
+
+static __always_inline void asm_pause_cpu(void)
+{
+	asm volatile("pause" ::: "memory");
 }
