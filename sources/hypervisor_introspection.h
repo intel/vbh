@@ -114,7 +114,7 @@ struct x86_dtable {
 	__u16 padding[3];
 };
 
-/*  */
+/* segment registers */
 struct x86_sregs {
 	struct x86_segment cs, ds, es, fs, gs, ss;	
 };
@@ -146,10 +146,10 @@ typedef enum
 	gdtr,
 	cpu_count,
 	current_tid,
-	gpr_registers_state,
+	general_purpose_registers,
 	cs_type,
 	cs_ring,
-	seg_registers_state	
+	segment_registers,
 }hvi_query_info_e;
 
 typedef enum
