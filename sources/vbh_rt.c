@@ -89,13 +89,19 @@ unsigned long *get_scratch_register(void)
 {
 	unsigned long *reg_ptr;
 
-	reg_ptr = per_cpu_ptr(reg_scratch, smp_processor_id());
+	reg_ptr = this_cpu_ptr(reg_scratch);
+	
 	return reg_ptr;
 }
 
-void *get_vcpu(void)
+void *get_vcpu(int cpu)
 {
-	return this_cpu_ptr(vcpu);
+	int me = smp_processor_id();
+	
+	if (cpu == me)
+		return this_cpu_ptr(vcpu);
+	else
+		return per_cpu_ptr(vcpu, cpu);
 }
 
 static void cpu_has_vmx_invept_capabilities(bool *context, bool *global)
@@ -356,6 +362,7 @@ void vmx_switch_and_exit_handler (void)
 	vcpu_ptr = this_cpu_ptr(vcpu);
 	reg_area[VCPU_REGS_RIP] = vmcs_readl(GUEST_RIP);
 	reg_area[VCPU_REGS_RSP] = vmcs_readl(GUEST_RSP);
+	reg_area[VCPU_REGS_RFLAG] = vmcs_readl(GUEST_RFLAGS);
 
 	vmexit_reason = vmcs_readl(VM_EXIT_REASON);
 	vcpu_ptr->instruction_skipped = false;
