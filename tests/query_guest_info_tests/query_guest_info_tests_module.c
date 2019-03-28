@@ -36,15 +36,15 @@ struct x86_sregs expected_sregs;
 
 struct x86_regs expected_regs;
 
-static void get_msr_test(void);
+static void get_msr_test(int cpu);
 
-static void get_cpu_count_test(void);
+static void get_cpu_count_test(int cpu);
 
-static void get_idt_test(void);
+static void get_idt_test(int cpu);
 
-static void get_gdt_test(void);
+static void get_gdt_test(int cpu);
 
-static void get_gpr_registers_test(void);
+static void get_gpr_registers_test(int cpu);
 static void set_sregs_expected_values(void);
 
 static void check_sreg(struct x86_segment *expected, struct x86_segment *actual)
@@ -66,7 +66,7 @@ static void check_sreg_result(char* name, struct x86_segment *expected, struct x
 	check_sreg(expected, actual);
 }
 
-static void get_gpr_registers_test(void)
+static void get_gpr_registers_test(int cpu)
 {
 	int size = PAGE_SIZE;
 	
@@ -81,7 +81,7 @@ static void get_gpr_registers_test(void)
 	
 	printk(KERN_ERR "<vbh_test>_%s: expected value = 0x%llx.\n", __func__, expected_rsp);
 	
-	result = hvi_query_guest_info(0, gpr_registers_state, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, general_purpose_registers, NULL, (unsigned char*)&actual, &size);
 	
 	actual_rsp = actual.rsp;
 	
@@ -94,7 +94,7 @@ static void get_gpr_registers_test(void)
 	assert(expected_rsp == actual_rsp);
 }
 
-static void get_gdt_test(void)
+static void get_gdt_test(int cpu)
 {
 	struct x86_dtable actual;
 	
@@ -104,7 +104,7 @@ static void get_gdt_test(void)
 	
 	printk(KERN_ERR "<vbh_test>_%s: expected base = 0x%llx, limit = 0x%x.\n", __func__, expected_gdt.base, expected_gdt.limit);
 	
-	result = hvi_query_guest_info(0, gdtr, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, gdtr, NULL, (unsigned char*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: actual base = 0x%llx, limit = 0x%x.\n", __func__, actual.base, actual.limit);
 	
@@ -115,7 +115,7 @@ static void get_gdt_test(void)
 	assert(expected_gdt.limit == actual.limit);
 }
 
-static void get_idt_test(void)
+static void get_idt_test(int cpu)
 {
 	struct x86_dtable actual;
 	
@@ -125,7 +125,7 @@ static void get_idt_test(void)
 
 	printk(KERN_ERR "<vbh_test>_%s: expected base = 0x%llx, limit=0x%x.\n", __func__, expected_idt.base, expected_idt.limit);
 	
-	result = hvi_query_guest_info(0, idtr, NULL, (void*)&actual, &size);
+	result = hvi_query_guest_info(cpu, idtr, NULL, (void*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: actual base = 0x%llx, limit=0x%x.\n", __func__, actual.base, actual.limit);
 	
@@ -136,7 +136,7 @@ static void get_idt_test(void)
 	assert(expected_idt.limit == actual.limit);
 }
 
-static void get_cpu_count_test(void)
+static void get_cpu_count_test(int cpu)
 {
 	int actual;
 	int size = sizeof(int);
@@ -145,7 +145,7 @@ static void get_cpu_count_test(void)
 	
 	printk(KERN_ERR "<vbh_test>_%s: expected value = %d.\n", __func__, expected_cpu_count);
 	
-	result = hvi_query_guest_info(0, cpu_count, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, cpu_count, NULL, (unsigned char*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: actual value = %d.\n", __func__, actual);
 	
@@ -154,7 +154,7 @@ static void get_cpu_count_test(void)
 	assert(expected_cpu_count == actual);	
 }
 
-static void get_msr_test(void)
+static void get_msr_test(int cpu)
 {
 	u64 actual;
 	
@@ -168,7 +168,7 @@ static void get_msr_test(void)
 
     printk(KERN_ERR "<vbh_test>_%s: expected value = 0x%llx.\n", __func__ , expected_msr_value);
 	
-	result = hvi_query_guest_info(0, query_type, (unsigned char*)&param, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, query_type, (unsigned char*)&param, (unsigned char*)&actual, &size);
 
     printk(KERN_ERR "<vbh_test>_%s: actual value = 0x%llx.\n", __func__ , actual);
 	
@@ -177,7 +177,7 @@ static void get_msr_test(void)
 	assert(expected_msr_value == actual);
 }
 
-static void get_cs_type_test(void)
+static void get_cs_type_test(int cpu)
 {
 	int actual;
 	
@@ -189,7 +189,7 @@ static void get_cs_type_test(void)
 	
 	printk(KERN_ERR "<vbh_test>_%s: expected value = %d.\n", __func__, expected_cs_type);
 	
-	result = hvi_query_guest_info(0, query_type, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, query_type, NULL, (unsigned char*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: actual value = %d.\n", __func__, actual);
 	
@@ -198,7 +198,7 @@ static void get_cs_type_test(void)
 	assert(expected_cs_type == actual);	
 }
 
-static void get_cs_ring_test(void)
+static void get_cs_ring_test(int cpu)
 {
 	int actual;
 	
@@ -210,7 +210,7 @@ static void get_cs_ring_test(void)
 	
 	printk(KERN_ERR "<vbh_test>_%s: expected value = %d.\n", __func__, expected_cs_ring);
 	
-	result = hvi_query_guest_info(0, query_type, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, query_type, NULL, (unsigned char*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: actual value = %d.\n", __func__, actual);
 	
@@ -220,7 +220,7 @@ static void get_cs_ring_test(void)
 	
 }
 
-static void get_seg_registers_state_test(void)
+static void get_seg_registers_state_test(int cpu)
 {
 	struct x86_sregs actual;
 	
@@ -228,12 +228,12 @@ static void get_seg_registers_state_test(void)
 	
 	int result;
 	
-	hvi_query_info_e query_type = seg_registers_state;
+	hvi_query_info_e query_type = segment_registers;
 
 	// sregs
 	set_sregs_expected_values();
 	
-	result = hvi_query_guest_info(0, query_type, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, query_type, NULL, (unsigned char*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: \n", __func__);	
 		
@@ -247,7 +247,7 @@ static void get_seg_registers_state_test(void)
 	check_sreg_result("SS", &expected_sregs.ss, &actual.ss);	
 }
 
-static void get_current_tid_test(void)
+static void get_current_tid_test(int cpu)
 {
 	int size = sizeof(int);
 	
@@ -257,7 +257,7 @@ static void get_current_tid_test(void)
 	
 	hvi_query_info_e query_type = current_tid;
 	
-	result = hvi_query_guest_info(0, query_type, NULL, (unsigned char*)&actual, &size);
+	result = hvi_query_guest_info(cpu, query_type, NULL, (unsigned char*)&actual, &size);
 	
 	printk(KERN_ERR "<vbh_test>_%s: expected value = %d, actual value = %d.\n", __func__, expected_tid, actual);
 	
@@ -266,7 +266,7 @@ static void get_current_tid_test(void)
 	assert(expected_tid == actual);	
 }
 
-static void get_register_state_test(void)
+static void get_guest_state_test(int cpu)
 {
 	hvi_x86_registers_t actual;
 	int size = sizeof(actual);
@@ -275,21 +275,25 @@ static void get_register_state_test(void)
 	
 	hvi_query_info_e query_type = registers_state;
 	
-	result = hvi_query_guest_info(0, query_type, NULL, (unsigned char*)&actual, &size);
+	expected_rsp = vmcs_read64(GUEST_RSP);
 	
-	printk(KERN_ERR "<vbh_test>_%s: Expected cr0 = 0x%llx, cr3 = 0x%llx, cr4 = 0x%llx, dr7 = 0x%llx.\n", 
+	result = hvi_query_guest_info(cpu, query_type, NULL, (unsigned char*)&actual, &size);
+	
+	printk(KERN_ERR "<vbh_test>_%s: Expected cr0 = 0x%llx, cr3 = 0x%llx, cr4 = 0x%llx, dr7 = 0x%llx, rsp = 0x%llx\n", 
 			__func__, 
 			expected_regs.cr0, 
 			expected_regs.cr3,
 			expected_regs.cr4,
-			expected_regs.dr7);
+			expected_regs.dr7,
+		    expected_rsp);
 	
-	printk(KERN_ERR "<vbh_test>_%s: Actual cr0 = 0x%llx, cr3 = 0x%llx, cr4 = 0x%llx, dr7 = 0x%llx.\n", 
+	printk(KERN_ERR "<vbh_test>_%s: Actual cr0 = 0x%llx, cr3 = 0x%llx, cr4 = 0x%llx, dr7 = 0x%llx, rsp = 0x%llx.\n", 
 		__func__, 
 		actual.cr0, 
 		actual.cr3,
 		actual.cr4,
-		actual.dr7);
+		actual.dr7,
+		actual.gprs.rsp);
 	assert(result == 0);
 	
 	assert(size == sizeof(actual));
@@ -300,40 +304,49 @@ static void get_register_state_test(void)
 	
 	assert(expected_regs.cr4 == actual.cr4);
 	
-	assert(expected_regs.dr7 == actual.dr7);		
+	assert(expected_regs.dr7 == actual.dr7);
+	
+	assert(expected_rsp == actual.gprs.rsp);
 }
 
 static int qgi_test_event_handler(hv_event_e type, unsigned char* data, int size, int* allow)
 {
+	int cpu = smp_processor_id();
+	
+	// pause all cpus first
+	hvi_request_vcpu_pause();
+	
 	// test get_msr returns correct value
-	get_msr_test();
+	get_msr_test(cpu);
 	
 	// test get_cpu_count returns correct value
-	get_cpu_count_test();
+	get_cpu_count_test(cpu);
 	
 	// test get_idt returns correct value
-	get_idt_test();
+	get_idt_test(cpu);
 	
 	// test get_gdt returns correct value
-	get_gdt_test();
+	get_gdt_test(cpu);
 	
 	// test get_gpr_register_state returns correct value
-	get_gpr_registers_test();
+	get_gpr_registers_test(cpu);
 	
 	// test get_cs_type returns correct value
-	get_cs_type_test();
+	get_cs_type_test(cpu);
 	
 	// test get_cs_ring returns correct value
-	get_cs_ring_test();
+	get_cs_ring_test(cpu);
 	
 	// test get_seg_registers_state returns correct value
-	get_seg_registers_state_test();
+	get_seg_registers_state_test(cpu);
 	
 	// test get_current_tid
-	get_current_tid_test();
+	get_current_tid_test(cpu);
 	
-	// test_get_register_state
-	get_register_state_test();
+	// test get_guest_state
+	get_guest_state_test(cpu);
+	
+	hvi_request_vcpu_resume();
 	
 	return 0;
 }

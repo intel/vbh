@@ -7,9 +7,12 @@
 #include <linux/time.h>
 
 #include "vmx_common.h"
+#include "hypervisor_introspection.h"
 
 cpu_control_params_t cr_ctrl;
 msr_control_params_t msr_ctrl;
+
+DEFINE_PER_CPU(struct vcpu_request, vcpu_req);
 
 // Each bit represents a vcpu.  The corresponding vcpu is paused when a bit is set.
 static DECLARE_BITMAP(paused_vcpus, NR_CPUS);
@@ -19,25 +22,28 @@ static DECLARE_BITMAP(pending_request_on_vcpus, NR_CPUS);
 
 static void pause_vcpu(void* info);
 
-inline int vcpus_paused(void);
+inline int all_vcpus_paused(void);
 
 extern void vcpu_exit_request_handler(unsigned int request);
 extern void handle_cr_monitor_req(cpu_control_params_t* cpu_param);
 extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
 extern void vbh_tlb_shootdown(void);
+extern int get_guest_state_pcpu(hvi_query_info_e query_type);
 
 void make_request(int request, int wait);
+
+void make_request_on_cpu(int cpu, int request, int wait);
 
 int pause_other_vcpus(void);
 
 void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
 
-inline int vcpus_paused(void)
+inline int all_vcpus_paused(void)
 {
 	return bitmap_full(paused_vcpus, num_online_cpus());
 }
 
-// This function is in ipi interrupt context.  Don't block.
+// This function is in ipi context.  Don't block.
 static void pause_vcpu(void* info)
 {
 	int cpu;
@@ -51,12 +57,25 @@ static void pause_vcpu(void* info)
 	put_cpu();
 }
 
+void make_request_on_cpu(int cpu, int request, int wait)
+{
+	struct vcpu_request *req=NULL;
+	
+	req = &per_cpu(vcpu_req, cpu);
+	
+	set_bit(request, req->pcpu_requests);
+	
+	if (test_and_set_bit(cpu, pending_request_on_vcpus))
+		printk(KERN_ERR "<1> make_request: VCPU-[%d] still has pending request.\n", cpu);
+	
+	if (wait)
+		spin_until_cond(test_bit(request, req->pcpu_requests)==0 && test_bit(cpu, pending_request_on_vcpus)==0);
+}
+
 void make_request(int request, int wait)
 {
 	int me, cpu, online_cpus;
-	
-	struct vcpu_vmx *vcpu_ptr;
-	
+
 	me = smp_processor_id();
 	online_cpus = num_online_cpus();
 	
@@ -64,11 +83,7 @@ void make_request(int request, int wait)
 	{
 		if (cpu != me)
 		{	
-			vcpu_ptr = per_cpu_ptr(vcpu, cpu);
-			set_bit(request, vcpu_ptr->vbh_requests);
-			
-			if (test_and_set_bit(cpu, pending_request_on_vcpus))
-				printk(KERN_ERR "<1> make_request: VCPU-[%d] still has pending request.\n", cpu);
+			make_request_on_cpu(cpu , request, false);
 		}				
 	}
 	
@@ -84,13 +99,15 @@ int resume_other_vcpus(void)
 	
 	printk(KERN_ERR "<1> resume_other_vcpus is called on CPU-[%d]: resuming....\n", smp_processor_id());	
 	
-	if (!vcpus_paused())
+	if (!all_vcpus_paused())
 	{
 		char buf[100] = { 0 };
 		
 		bitmap_print_to_pagebuf(true, buf, paused_vcpus, online_cpus);
 		
-		printk(KERN_ERR "<1> resume_other_vcpus:  Cannot resume.  Only vcpus: %s are paused.\n", buf);
+		printk(KERN_ERR "<!ERROR!> resume_other_vcpus:  Only vcpus: %s are paused.\n", buf);
+		
+		make_request(VBH_REQ_RESUME, false);
 		
 		return -1;
 	}
@@ -121,8 +138,11 @@ int pause_other_vcpus(void)
 	bitmap_set(paused_vcpus, me, 1);
 	
 	// if all vcpus are already paused (including self), there is nothing to do.
-	if (vcpus_paused())
+	if(all_vcpus_paused())
+	{
+		printk(KERN_ERR "<1>pause_other_vcpus: already paused.\n");
 		return 0;
+	}
 	
 	make_request(VBH_REQ_PAUSE, false);		
 		
@@ -139,7 +159,7 @@ int pause_other_vcpus(void)
 	// send ipi to all other vcpus
 	on_each_cpu_mask(&pause_mask, pause_vcpu, NULL, 0);
 		
-	// wait until all cpus enters root mode
+	// wait until all cpus enter root mode
 	spin_until_cond(bitmap_full(paused_vcpus,online_cpus));
 		
 	do_gettimeofday(&end);
@@ -155,11 +175,14 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 {
 	struct timeval start, end;
 	unsigned long paused_time;
+	struct vcpu_request *req;
 	
 	int pause_requested = 0;
 	
-	int me = smp_processor_id();		
+	int me = smp_processor_id();	
 	
+	req = this_cpu_ptr(&vcpu_req);
+
 	do_gettimeofday(&start);
 
 	do
@@ -167,7 +190,7 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 		// If I have a pending request
 		if (test_bit(me, pending_request_on_vcpus))
 		{		
-			if (test_and_clear_bit(VBH_REQ_PAUSE, vcpu->vbh_requests))
+			if (test_and_clear_bit(VBH_REQ_PAUSE, req->pcpu_requests))
 			{
 				printk(KERN_ERR "<1>handle_vcpu_request: PAUSE on vcpu=%d\n", me);
 			
@@ -177,38 +200,54 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 				set_bit(me, paused_vcpus);				
 			}
 				
-			if (test_and_clear_bit(VBH_REQ_RESUME, vcpu->vbh_requests))
+			if (test_and_clear_bit(VBH_REQ_RESUME, req->pcpu_requests))
 			{
 				printk(KERN_ERR "<1>handle_vcpu_request: RESUME on vcpu=%d.\n", me);		
 			
 				pause_requested = 0;
 			}
-			//		
-			//		if (test_and_clear_bit(VBH_REQ_SET_RFLAGS, vcpu->vbh_requests))
-			//		{
-			//			printk(KERN_ERR "<1>handle_vcpu_request: SET_RFLAGS on vcpu=%d.\n", cpu);
-			//		}
-			//		
-			//		if (test_and_clear_bit(VBH_REQ_SET_RIP, vcpu->vbh_requests))
-			//		{
-			//			printk(KERN_ERR "<1>handle_vcpu_request: SET_RIP on vcpu=%d.\n", cpu);
-			//		}
-			//		
-			if(test_and_clear_bit(VBH_REQ_INVEPT, vcpu->vbh_requests))
+					
+			if (test_bit(VBH_REQ_SET_RFLAGS, req->pcpu_requests))
+			{					
+				printk(KERN_ERR "<1>handle_vcpu_request: SET_RFLAGS on vcpu=%d, curr_value=0x%lx, new_value=0x%lx.\n", me, vmcs_readl(GUEST_RFLAGS), req->new_value);
+				
+				vmcs_writel(GUEST_RFLAGS, req->new_value);
+				
+				clear_bit(VBH_REQ_SET_RFLAGS, req->pcpu_requests);
+			}
+			
+			if (test_bit(VBH_REQ_GUEST_STATE, req->pcpu_requests))
+			{
+				printk(KERN_ERR "<1>handle_vcpu_request: VBH_REQ_GUEST_STATE on vcpu=%d.\n", me);
+				get_guest_state_pcpu(req->query_gstate_type);
+				clear_bit(VBH_REQ_GUEST_STATE, req->pcpu_requests);
+			}
+					
+			if (test_and_clear_bit(VBH_REQ_SET_RIP, req->pcpu_requests))
+			{
+				printk(KERN_ERR "<1>handle_vcpu_request: SET_RIP on vcpu=%d, new_value=0x%lx.\n", me, req->new_value);
+				
+				if (req->new_value != 0)					
+					vmcs_writel(GUEST_RIP, req->new_value);
+				else
+					printk(KERN_ERR "<!ERROR!>handle_vcpu_request: SET_RIP on vcpu=%d.  Invalid RIP value.\n", me);
+			}
+					
+			if (test_and_clear_bit(VBH_REQ_INVEPT, req->pcpu_requests))
 			{			
 				printk(KERN_ERR "<1>handle_vcpu_request: INVEPT on vcpu=%d.\n", me);			
 			
 				vbh_tlb_shootdown();			
 			}
 				
-			if (test_and_clear_bit(VBH_REQ_MODIFY_CR, vcpu->vbh_requests))
+			if (test_and_clear_bit(VBH_REQ_MODIFY_CR, req->pcpu_requests))
 			{
 				printk(KERN_ERR "<1>handle_vcpu_request: MODIFY_CR on vcpu=%d.\n", me);
 			
 				handle_cr_monitor_req(&cr_ctrl);
 			}
 				
-			if (test_and_clear_bit(VBH_REQ_MODIFY_MSR, vcpu->vbh_requests))
+			if (test_and_clear_bit(VBH_REQ_MODIFY_MSR, req->pcpu_requests))
 			{
 				printk(KERN_ERR "<1>handle_vcpu_request: MODIFY_MSR on vcpu=%d.\n", me);
 			

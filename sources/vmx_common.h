@@ -2,7 +2,9 @@
 #include <linux/semaphore.h>
 #include <linux/workqueue.h>
 #include <asm/vmx.h>
+
 #include "offsets.h"
+#include "hypervisor_introspection.h"
 
 typedef enum {
 	CPU_REG_CR0 = 0,
@@ -32,14 +34,14 @@ typedef struct {
 	cpu_reg_e cpu_reg;
 	bool enable;
 	unsigned long mask;
-	//unsigned int vcpu;
+	unsigned int vcpu;
 } cpu_control_params_t;
 
 typedef struct
 {
 	msr_reg_e msr_reg;
 	bool enable;
-	//unsigned int vcpu;
+	unsigned int vcpu;
 }msr_control_params_t;
 
 typedef struct
@@ -55,6 +57,30 @@ typedef struct
 	unsigned call_type;
 } vmcall_t;
 
+union guest_state
+{
+	hvi_x86_registers_t g_states;
+	struct x86_sregs g_segment_registers;
+	struct x86_dtable dtr;  //gdtr or idtr
+	u64 g_msr;
+	int g_num_cpus;
+	int g_current_tid;
+	hvi_x86_gpr_t g_gprs;
+	int g_cs_type;
+	int g_cs_ring;
+};
+
+struct vcpu_request
+{
+	DECLARE_BITMAP(pcpu_requests, 16);  	// bitmap for all requests on a vcpu
+	int query_gstate_type;		// what guest info to get
+	int query_gstate_param;		// parameter for a specific guest info
+	unsigned long new_value;
+	union guest_state guest_data;
+	int guest_data_sz;
+	//void *p_gdata;
+};
+
 struct vmcs {
 	u32 revision_id;
 	u32 abort;
@@ -66,14 +92,11 @@ struct vcpu_vmx {
 	struct vmcs *vmxarea;
 	u64 vcpu_stack;
 	unsigned long *regs;
-	struct pause_vcpu_work_data *pause_vcpu_work;			
-	struct workqueue_struct *pause_vcpu_wq;
 	bool instruction_skipped;
 	bool skip_instruction_not_used;
-	DECLARE_BITMAP(vbh_requests, 16);	// bitmap for all requests on a vcpu
-	unsigned long vbh_req_new_value;	// used for new reg value
-	
 };
+
+DECLARE_PER_CPU(struct vcpu_request, vcpu_req);
 
 extern struct vcpu_vmx __percpu* vcpu;
 DECLARE_PER_CPU(unsigned long[NR_VCPU_REGS], reg_scratch);
@@ -143,9 +166,10 @@ struct vmcs_config {
 #define VBH_REQ_RESUME		BIT(1)
 #define VBH_REQ_SET_RFLAGS	BIT(2)
 #define VBH_REQ_SET_RIP		BIT(3)
-#define VBH_REQ_INVEPT		BIT(6)
 #define VBH_REQ_MODIFY_MSR	BIT(4)
 #define VBH_REQ_MODIFY_CR	BIT(5)
+#define VBH_REQ_INVEPT		BIT(6)
+#define VBH_REQ_GUEST_STATE	BIT(7)
 
 void monitor_cpu_events(unsigned long mask, bool enable, cpu_reg_e reg);
 

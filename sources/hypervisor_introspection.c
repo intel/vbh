@@ -1,7 +1,8 @@
-#include "hypervisor_introspection.h"
 #include <linux/printk.h>
 #include <linux/module.h>
 #include <asm/vmx.h>
+
+#include "hypervisor_introspection.h"
 #include "vmx_common.h"
 #include "offsets.h"
 
@@ -20,6 +21,8 @@ void set_ept_entry_prot(unsigned long*, int, int, int);
 
 int get_ept_entry_prot(unsigned long entry);
 
+static int get_min_req_size(hvi_query_info_e query);
+
 extern void handle_cr_monitor_req(cpu_control_params_t* cpu_param);
 
 extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
@@ -30,23 +33,15 @@ extern int pause_other_vcpus(void);
 
 extern int resume_other_vcpus(void);
 
-// functions related to query guest info
-extern int get_register_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_msr(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_idtr(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_gdtr(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_cpu_count(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_current_tid(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_gpr_registers_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_cs_type(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_cs_ring(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
-extern int get_seg_registers_state(int vcpu, unsigned char* param, unsigned char* buffer, int* size);
+extern int get_guest_state_pcpu(void);
 extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
-extern inline int vcpus_paused(void);
+extern inline int all_vcpus_paused(void);
 extern void make_request(int request, int wait);
+extern void make_request_on_cpu(int cpu, int request, int wait);
 extern void vbh_tlb_shootdown(void);
+extern void set_guest_rip(void);
 
-extern void* get_vcpu(void);
+extern void* get_vcpu(int cpu);
 
 extern int vmx_switch_to_nonroot(void);
 extern bool check_vbh_status(void);
@@ -85,64 +80,87 @@ int hvi_invoke_ept_violation_handler(unsigned long long gpa, unsigned long long 
     return hvi_ept_violation_callback(gpa, gla, allow);
 }
 
+static int get_min_req_size(hvi_query_info_e query)
+{
+	switch (query) 
+	{
+		case registers_state :
+			return sizeof(hvi_x86_registers_t);
+		case msr:
+			return sizeof(u64);
+		case idtr:
+		case gdtr:
+			return sizeof(struct x86_dtable);
+		case cpu_count:
+		case current_tid:
+		case cs_type:
+		case cs_ring:
+			return sizeof(int);
+		case general_purpose_registers:
+			return 16*sizeof(unsigned long);
+		case segment_registers:
+			return sizeof(struct x86_sregs);
+	}
+	
+	return 0;
+}
+
 /*
  *Query specific guest information.
  **/
 int hvi_query_guest_info(int vcpu, hvi_query_info_e query_type, unsigned char* param, unsigned char* buffer, int* size)
 {
-	int result = 0;
+	int me;
+	int min_size;
 	
-	switch (query_type)
+	struct vcpu_request *req;
+	
+	me = smp_processor_id();
+	
+	min_size = get_min_req_size(query_type);
+	
+	if(buffer == NULL || *size < min_size)
 	{
-	case registers_state:
-		result = get_register_state(vcpu, param, buffer, size);
-		break;
-		
-	case msr:
-		result = get_msr(vcpu, param, buffer, size);
-		break;
-		
-	case idtr:
-		result = get_idtr(vcpu, param, buffer, size);
-		break;
-		
-	case gdtr:
-		result = get_gdtr(vcpu, param, buffer, size);
-		break;
-		
-	case cpu_count:
-		result = get_cpu_count(vcpu, param, buffer, size);
-		break;
-		
-	case current_tid:
-		result = get_current_tid(vcpu, param, buffer, size);
-		break;
-		
-	case gpr_registers_state:
-		result = get_gpr_registers_state(vcpu, param, buffer, size);
-		break;
-		
-	case cs_type:
-		result = get_cs_type(vcpu, param, buffer, size);
-		break;
-		
-	case cs_ring:
-		result = get_cs_ring(vcpu, param, buffer, size);
-		break;
-		
-	case seg_registers_state:
-		result = get_seg_registers_state(vcpu, param, buffer, size);
-		break;		
-		
-	default:
-		*size = 0;
-		result = -1;
-		break;
+		printk(KERN_ERR "<1>hvi_query_guest_info:  Not enough buffer space.\n");
+		return -1;
+	}
+			
+	if (!all_vcpus_paused())
+	{
+		printk(KERN_ERR "<1>hvi_query_guest_info: Error.  Must pause all vcpus before proceed.\n");
+		return -1;
+	}
+
+	req = per_cpu_ptr(&vcpu_req, vcpu==me?me:vcpu);
+	
+	req->guest_data_sz = 0;
+
+	req->query_gstate_type = query_type;
+	
+	// sof far only used to pass which msr to query
+	if (param != NULL)
+		req->query_gstate_param = *param;
+	
+	//TODO: when remote cpu is paused, it is in ipi context.  guest state is only about
+	// ipi interrupt handler information, instead of info about process running when cpu
+	// is paused.  We need to fix this or remove the support of query on remote cpu.
+//	if (vcpu != me)
+//	{		
+//		make_request_on_cpu(vcpu, VBH_REQ_GUEST_STATE, true);					
+//	}		
+//	else
+	{
+		get_guest_state_pcpu();
 	}
 	
-	if (result == 0)
+	if(req->guest_data_sz > 0)
+	{
+		memcpy(buffer, (unsigned char *)&req->guest_data, req->guest_data_sz);
+		*size = req->guest_data_sz;
+		
 		return 0;
-	
+	}
+		
 	return -1;
 }
 EXPORT_SYMBOL(hvi_query_guest_info);
@@ -152,7 +170,32 @@ EXPORT_SYMBOL(hvi_query_guest_info);
  **/
 int hvi_set_register_rflags(int vcpu, unsigned long new_value)
 {
-	vmcs_writel(GUEST_RFLAGS, new_value);
+	int me;
+	struct vcpu_request *req;
+	
+	if (!all_vcpus_paused())
+	{
+		printk(KERN_ERR "<1>hvi_set_register_rflags: Error.  Must pause all vcpus before proceed.\n");
+		return -1;
+	}
+	
+	me = smp_processor_id();
+	
+	printk(KERN_ERR "<1>hvi_set_register_rflags: curr_cpu=%d, request_cpu=%d, curr_value=0x%lx, new_value=0x%lx", me, vcpu, vmcs_readl(GUEST_RFLAGS), new_value);
+	
+	//TODO: when remote cpu is paused, it is in ipi context.  guest state only contains
+	// ipi interrupt handler information, instead of info about process running when cpu
+	// is paused.  We need to fix this or remove the support of query on remote cpu.
+	if (vcpu == me)
+	{		
+		vmcs_writel(GUEST_RFLAGS, new_value);	
+	}		
+//	else
+//	{			
+//		req = per_cpu_ptr(&vcpu_req, vcpu);
+//		req->new_value = new_value;
+//		make_request_on_cpu(vcpu , VBH_REQ_SET_RFLAGS, true);
+//	}
 	
 	return 0;
 }
@@ -163,20 +206,42 @@ EXPORT_SYMBOL(hvi_set_register_rflags);
  **/
 int hvi_set_register_rip(int vcpu, unsigned long new_value)
 {
+	int me;
 	struct vcpu_vmx *vcpu_ptr;
+	struct vcpu_request *req;
 
 	// basic error checking
 	if(new_value == 0)
 		return - 1;
-		
-	vcpu_ptr = (struct vcpu_vmx*)get_vcpu();
 	
-	if (vcpu_ptr == NULL)
+	if (!all_vcpus_paused())
+	{
+		printk(KERN_ERR "<1>hvi_set_register_rip: Error.  Must pause all vcpus before proceed.\n");
 		return -1;
+	}
 	
-	vmcs_writel(GUEST_RIP, new_value);	
+	vcpu_ptr = (struct vcpu_vmx*)get_vcpu(vcpu);
+	if (!vcpu_ptr)
+		return -1;
+					
+	me = smp_processor_id();
 	
-	vcpu_ptr->skip_instruction_not_used = 1;
+	req = per_cpu_ptr(&vcpu_req, vcpu);
+
+	//TODO: when remote cpu is paused, it is in ipi context.  guest state is only about
+	// ipi interrupt handler information, instead of info about process running when cpu
+	// is paused.  We need to fix this or remove the support of query on remote cpu.
+	if (vcpu == me)
+	{
+		vmcs_writel(GUEST_RIP, new_value);
+		vcpu_ptr->skip_instruction_not_used = 1;
+	}		
+//	else
+//	{		
+//		req->new_value = new_value;
+//		vcpu_ptr->skip_instruction_not_used = 1;
+//		make_request_on_cpu(vcpu, VBH_REQ_SET_RIP, true);
+//	}
 	
 	return 0;
 }
@@ -261,9 +326,12 @@ int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned
 {
 	unsigned long *ept_entry;
 
-	if (!vcpus_paused())
+	if (!all_vcpus_paused())
+	{
+		printk(KERN_ERR "<1>hvi_set_ept_page_protection: Error.  Must pause all vcpus before proceed.\n");
 		return -1;
-
+	}
+		
 	// update ept
 	ept_entry = get_ept_entry(addr);
 
@@ -287,9 +355,12 @@ EXPORT_SYMBOL(hvi_set_ept_page_protection);
  **/
 int hvi_modify_msr_write_exit(unsigned long msr, unsigned char is_enable)
 {
-	if (!vcpus_paused())
+	if (!all_vcpus_paused())
+	{		
+		printk(KERN_ERR "<1>hvi_modify_msr_write_exit: Error.  Must pause all vcpus before proceed.\n");
 		return -1;
-	
+	}
+
 	// setup new policy
 	msr_ctrl.enable = is_enable;
 	
@@ -311,8 +382,11 @@ int hvi_modify_msr_write_exit(unsigned long msr, unsigned char is_enable)
  **/
 int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask, unsigned char is_enable)
 {	
-	if (!vcpus_paused())
+	if (!all_vcpus_paused())
+	{
+		printk(KERN_ERR "<1>hvi_modify_cr_write_exit: Error.  Must pause all vcpus before proceed.\n");
 		return -1;
+	}
 	
 	// setup policy
 	cr_ctrl.enable = is_enable;

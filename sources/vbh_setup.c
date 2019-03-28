@@ -862,7 +862,7 @@ static void setup_vmcs_memory(void)
 
 		// setup revision id in vmxon region
 		vmxon_setup_revid(vcpu_ptr->vmxarea);
-
+		
 		vcpu_ptr->pcpu_vmcs = alloc_vmcs_cpu(cpu, vmcs_config_ptr);
 
 		//printk(KERN_ERR "<1> CPU-%d: vmxarea=0x%p, vmxarea-physical=0x%p, pcpu_vmcs=0x%p", cpu, vcpu_ptr->vmxarea, (void *)phys_addr, vcpu_ptr->pcpu_vmcs);
