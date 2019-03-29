@@ -71,9 +71,6 @@ static void cpu_has_vmx_invept_capabilities(bool *context, bool *global);
 
 extern void asm_make_vmcall(unsigned int hypercall_id, void *params);
 
-extern int hvi_invoke_ept_violation_handler(unsigned long long gpa,
-			unsigned long long gla, int *allow);
-
 extern void hvi_handle_event_cr(__u16 cr, unsigned long old_value,
 			unsigned long new_value, int *allow);
 
@@ -83,6 +80,8 @@ extern void hvi_handle_event_msr(__u32 msr, __u64 old_value,
 extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
 
 extern void hvi_handle_event_vmcall(void);
+
+extern int hvi_handle_ept_violation(__u64 gpa, __u64 gla, int* allow);
 
 
 unsigned long *get_scratch_register(void)
@@ -182,13 +181,15 @@ void handle_ept_violation(struct vcpu_vmx *vcpu)
 
 	printk("EPT_VIOLATION at GPA -> 0x%llx GVA -> 0x%llx, exit_qulification = 0x%lx, G_RSP = 0x%lx, G_RIP=0x%lx\n", gpa, gla, exit_qual, g_rsp, g_rip);
 
-	if (hvi_invoke_ept_violation_handler(gpa, gla, &allow)) {
-		printk(KERN_ERR "vmx-root: hvi_invoke_ept_violation_handler failed\n");
+	if (hvi_handle_ept_violation(gpa, gla, &allow)) {
+		printk(KERN_ERR "vmx-root: hvi_handle_ept_violation failed\n");
 	} else if (allow) {
 		// TODO
 		printk(KERN_ERR "vmx-root: unsupported action");
 		return;
 	}
+
+    vmx_switch_skip_instruction();
 }
 
 void handle_vmcall(struct vcpu_vmx *vcpu)
