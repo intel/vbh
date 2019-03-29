@@ -46,40 +46,6 @@ extern void* get_vcpu(int cpu);
 extern int vmx_switch_to_nonroot(void);
 extern bool check_vbh_status(void);
 
-static int (*hvi_ept_violation_callback)(unsigned long long gpa, unsigned long long gla, int* allow);
-
-int hvi_register_ept_violation_handler(int(*callback)(unsigned long long gpa, unsigned long long gla, int* allow))
-{
-    if (NULL != hvi_ept_violation_callback)
-    {
-        printk(KERN_ERR "hvi_register_ept_violation_handler: there is already a registered callback\n");
-        return -1;
-    }
-    hvi_ept_violation_callback = callback;
-    return 0;
-}
-EXPORT_SYMBOL(hvi_register_ept_violation_handler);
-
-
-int hvi_unregister_ept_violation_handler(void)
-{
-    hvi_ept_violation_callback = NULL;
-    return 0;
-}
-EXPORT_SYMBOL(hvi_unregister_ept_violation_handler);
-
-
-int hvi_invoke_ept_violation_handler(unsigned long long gpa, unsigned long long gla, int* allow)
-{
-    if (NULL == hvi_ept_violation_callback)
-    {
-        printk (KERN_ERR "an ept violation occured but there is no hvi callback available.\n");
-        return -1;
-    }
-    
-    return hvi_ept_violation_callback(gpa, gla, allow);
-}
-
 static int get_min_req_size(hvi_query_info_e query)
 {
 	switch (query) 
