@@ -40,13 +40,12 @@ struct hvi_event_breakpoint {
 	__u64 gpa;
 };
 
-struct hvi_event_page_fault {
-	__u64 gva;
+struct hvi_event_ept_violation {
+	__u64 gla;
 	__u64 gpa;
 	__u32 mode;
 	__u32 padding;
 };
-
 
 struct hvi_event_msr {
 	__u32 msr;

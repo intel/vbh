@@ -43,6 +43,16 @@ int hvi_handle_event_vmcall(void)
 	return hvi_report_event(vmcall, NULL, 0, &allow);
 }
 
+int hvi_handle_ept_violation(__u64 gpa, __u64 gla, int* allow)
+{
+    struct hvi_event_ept_violation ept_violation_event = {0};
+
+    ept_violation_event.gpa = gpa;
+    ept_violation_event.gla = gla;
+
+    return hvi_report_event(ept_violation, (void*)&ept_violation_event, sizeof(struct hvi_event_ept_violation), allow);
+}
+
 static int hvi_report_event(hv_event_e event, void* data, int size, int *allow)
 {
 	if (global_event_callbacks[event].callback != NULL)
