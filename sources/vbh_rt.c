@@ -183,12 +183,10 @@ void handle_ept_violation(struct vcpu_vmx *vcpu)
 
 	if (hvi_handle_ept_violation(gpa, gla, &allow)) {
 		printk(KERN_ERR "vmx-root: hvi_handle_ept_violation failed\n");
-	} else if (allow) {
-		// TODO
-		printk(KERN_ERR "vmx-root: unsupported action");
-		return;
-	}
+    }
 
+    // Skip the instruction regardless the value of allow.
+    // TODO: skip only if allow is false.
     vmx_switch_skip_instruction();
 }
 
