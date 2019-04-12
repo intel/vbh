@@ -314,7 +314,7 @@ static int qgi_test_event_handler(hv_event_e type, unsigned char* data, int size
 	int cpu = smp_processor_id();
 	
 	// pause all cpus first
-	hvi_request_vcpu_pause();
+	hvi_request_vcpu_pause(false);
 	
 	// test get_msr returns correct value
 	get_msr_test(cpu);

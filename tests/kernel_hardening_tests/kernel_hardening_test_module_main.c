@@ -235,7 +235,7 @@ static int kh_test_vmcall_event_handler(hv_event_e type, unsigned char* data, in
 	int ret;
 
 	printk(KERN_ERR "[!TEST!]kh_test_vmcall_event_handler: set_policy.\n");
-	ret = hvi_request_vcpu_pause();
+	ret = hvi_request_vcpu_pause(false);
 	
 	assert(ret == SUCCESS);
 	

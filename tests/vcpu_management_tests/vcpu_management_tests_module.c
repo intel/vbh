@@ -102,7 +102,7 @@ static int vcpu_mgr_test_vmcall_event_handler(hv_event_e type, unsigned char* da
 	
 	printk(KERN_ERR "<!TEST!>: Ready request pause on cpu [%d], processor [%d], interrupt is %s.\n", cpu, smp_processor_id(), irqs_disabled() ? "disabled" : "enabled");
 	
-	ret = hvi_request_vcpu_pause();
+	ret = hvi_request_vcpu_pause(false);
 	
 	printk(KERN_ERR "<!TEST!>: hvi_request_vcpu_pause %s.\n", ret==0?"Succeeds":"Fails");
 	

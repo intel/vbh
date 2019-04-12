@@ -5,9 +5,15 @@
 #include <linux/param.h>
 #include <linux/sched.h>
 #include <linux/time.h>
+#include <linux/delay.h>
 
 #include "vmx_common.h"
 #include "hypervisor_introspection.h"
+
+#define INIT_IPI_TIMEOUT_1				10		 // The first timeout is 10 us
+#define INIT_IPI_TIMEOUT_2				1000	 // The second timeout is 1ms
+#define INIT_IPI_TIMEOUT_3				10*1000	 // The thirst timeout is 10ms
+#define VCPU_PAUSE_WAIT_TIMEOUT_IN_US	10*1000  // timeout every 10ms
 
 cpu_control_params_t cr_ctrl;
 msr_control_params_t msr_ctrl;
@@ -20,7 +26,12 @@ static DECLARE_BITMAP(paused_vcpus, NR_CPUS);
 // Each bit represents a vcpu.  The bit is cleared after pending request on a vcpu is handled.
 static DECLARE_BITMAP(pending_request_on_vcpus, NR_CPUS);
 
+static int vbh_cpu_present_to_apicid(int cpu);
+
 static void pause_vcpu(void* info);
+
+static void vbh_timer_set(struct timeval* start);
+static int vbh_timed_out(int timeout_in_ns, struct timeval *start);
 
 inline int all_vcpus_paused(void);
 
@@ -34,13 +45,35 @@ void make_request(int request, int wait);
 
 void make_request_on_cpu(int cpu, int request, int wait);
 
-int pause_other_vcpus(void);
+int pause_other_vcpus(int immediate);
 
 void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
 
 inline int all_vcpus_paused(void)
 {
 	return bitmap_full(paused_vcpus, num_online_cpus());
+}
+
+static int vbh_cpu_present_to_apicid(int cpu)
+{
+	return cpu_data(cpu).apicid;
+}
+
+static void vbh_timer_set(struct timeval* start)
+{
+	do_gettimeofday(start);
+}
+
+static int vbh_timed_out(int timeout_in_us, struct timeval *start)
+{
+	struct timeval end;
+	
+	do_gettimeofday(&end);
+		
+	if ((timeval_to_ns(&end) - timeval_to_ns(start))/1000 >= timeout_in_us)
+		return true;
+	
+	return false;
 }
 
 // This function is in ipi context.  Don't block.
@@ -117,7 +150,104 @@ int resume_other_vcpus(void)
 	return 0;
 }
 
-int pause_other_vcpus(void)
+static void vbh_send_init_ipi(int cpu, int delay_in_us)
+{
+	int apicid;
+	
+	apicid = vbh_cpu_present_to_apicid(cpu);
+		
+	// asserting init ipi line
+	apic_icr_write(APIC_INT_LEVELTRIG | APIC_INT_ASSERT | APIC_DM_INIT, apicid);
+		
+	udelay(delay_in_us);
+		
+	// de-asserting
+	apic_icr_write(APIC_INT_LEVELTRIG | APIC_DM_INIT, apicid);
+	
+	udelay(delay_in_us);
+}
+
+static int _immediate_exit_with_timeout(int timeout_in_us)
+{
+	int cpu;
+
+	int online_cpus;
+	struct timeval start;
+	
+	online_cpus = num_online_cpus();
+	
+	for_each_online_cpu(cpu)
+	{
+		if (test_bit(cpu, paused_vcpus))
+			continue;
+		
+		vbh_send_init_ipi(cpu, timeout_in_us);
+	}
+	
+	vbh_timer_set(&start);
+	
+	spin_until_cond(bitmap_full(paused_vcpus, online_cpus) || vbh_timed_out(VCPU_PAUSE_WAIT_TIMEOUT_IN_US, &start));
+	
+	if (bitmap_full(paused_vcpus, online_cpus))
+		return 0;
+	
+	return -1;
+}
+
+
+static int immediate_exit(void)
+{	
+	DECLARE_BITMAP(un_paused_vcpus, NR_CPUS);
+	
+	struct timeval start, end;
+	unsigned long elapsed;
+	int ret;
+	
+	char buf[256] = { 0 };
+	
+	do_gettimeofday(&start);
+	
+	// take chance the first time
+	if(_immediate_exit_with_timeout(INIT_IPI_TIMEOUT_1) == 0)
+	{
+		ret = 0;
+		goto done;
+	}
+	
+	// be more patient the second time
+	bitmap_complement(un_paused_vcpus, paused_vcpus, num_online_cpus());
+	bitmap_print_to_pagebuf(true, buf, un_paused_vcpus, num_online_cpus());
+	printk(KERN_ERR "<1> immediate_exit: Second try on %s...\n", buf);
+	
+	if (_immediate_exit_with_timeout(INIT_IPI_TIMEOUT_2) == 0)
+	{
+		ret = 0;
+		goto done;
+	}
+	
+	// last time
+	bitmap_complement(un_paused_vcpus, paused_vcpus, num_online_cpus());
+	bitmap_print_to_pagebuf(true, buf, un_paused_vcpus, num_online_cpus());
+	printk(KERN_ERR "<1> immediate_exit: Third try... on %s\n", buf);
+	
+	if (_immediate_exit_with_timeout(INIT_IPI_TIMEOUT_3) == 0)
+	{
+		ret = 0;
+		goto done;
+	}
+	
+	ret = -1;
+	
+done:
+	do_gettimeofday(&end);
+		
+	elapsed = timeval_to_ns(&end) - timeval_to_ns(&start);
+	bitmap_print_to_pagebuf(true, buf, paused_vcpus, num_online_cpus());	
+	printk(KERN_ERR "<1> pause_other_vcpus: It takes %ld ns to pause vcpus: %s.\n", elapsed, buf);
+	return ret;
+}
+
+int pause_other_vcpus(int immediate)
 {
 	char cpumask_print_buf[100] = { 0 };
 	
@@ -145,7 +275,10 @@ int pause_other_vcpus(void)
 	}
 	
 	make_request(VBH_REQ_PAUSE, false);		
-		
+	
+	if (immediate)
+		return immediate_exit();
+	
 	// only send ipi to other cpus except self	
 	for_each_online_cpu(cpu)
 		if (cpu != me)
@@ -199,20 +332,13 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 				// let requestor know that I'm paused.
 				set_bit(me, paused_vcpus);				
 			}
-				
-			if (test_and_clear_bit(VBH_REQ_RESUME, req->pcpu_requests))
-			{
-				printk(KERN_ERR "<1>handle_vcpu_request: RESUME on vcpu=%d.\n", me);		
-			
-				pause_requested = 0;
-			}
 					
 			if (test_bit(VBH_REQ_SET_RFLAGS, req->pcpu_requests))
 			{					
 				printk(KERN_ERR "<1>handle_vcpu_request: SET_RFLAGS on vcpu=%d, curr_value=0x%lx, new_value=0x%lx.\n", me, vmcs_readl(GUEST_RFLAGS), req->new_value);
 				
-				vmcs_writel(GUEST_RFLAGS, req->new_value);
-				
+				vmcs_writel(GUEST_RFLAGS, req->new_value);				
+								
 				clear_bit(VBH_REQ_SET_RFLAGS, req->pcpu_requests);
 			}
 			
@@ -225,12 +351,12 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 					
 			if (test_and_clear_bit(VBH_REQ_SET_RIP, req->pcpu_requests))
 			{
-				printk(KERN_ERR "<1>handle_vcpu_request: SET_RIP on vcpu=%d, new_value=0x%lx.\n", me, req->new_value);
-				
 				if (req->new_value != 0)					
 					vmcs_writel(GUEST_RIP, req->new_value);
 				else
 					printk(KERN_ERR "<!ERROR!>handle_vcpu_request: SET_RIP on vcpu=%d.  Invalid RIP value.\n", me);
+				
+				printk(KERN_ERR "<1>handle_vcpu_request: SET_RIP, new guest_rip=0x%lx.\n", vmcs_readl(GUEST_RIP));
 			}
 					
 			if (test_and_clear_bit(VBH_REQ_INVEPT, req->pcpu_requests))
@@ -252,6 +378,13 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 				printk(KERN_ERR "<1>handle_vcpu_request: MODIFY_MSR on vcpu=%d.\n", me);
 			
 				handle_msr_monitor_req(&msr_ctrl);
+			}
+										
+			if (test_and_clear_bit(VBH_REQ_RESUME, req->pcpu_requests))
+			{
+				printk(KERN_ERR "<1>handle_vcpu_request: RESUME on vcpu=%d.\n", me);		
+			
+				pause_requested = 0;
 			}
 			
 			// Done processing request
