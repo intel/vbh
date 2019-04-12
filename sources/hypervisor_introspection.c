@@ -29,7 +29,7 @@ extern void handle_msr_monitor_req(msr_control_params_t* msr_param);
 
 extern void cpu_switch_flush_tlb_smp(void);
 
-extern int pause_other_vcpus(void);
+extern int pause_other_vcpus(int immediate);
 
 extern int resume_other_vcpus(void);
 
@@ -107,14 +107,11 @@ int hvi_query_guest_info(int vcpu, hvi_query_info_e query_type, unsigned char* p
 	if (param != NULL)
 		req->query_gstate_param = *param;
 	
-	//TODO: when remote cpu is paused, it is in ipi context.  guest state is only about
-	// ipi interrupt handler information, instead of info about process running when cpu
-	// is paused.  We need to fix this or remove the support of query on remote cpu.
-//	if (vcpu != me)
-//	{		
-//		make_request_on_cpu(vcpu, VBH_REQ_GUEST_STATE, true);					
-//	}		
-//	else
+	if (vcpu != me)
+	{		
+		make_request_on_cpu(vcpu, VBH_REQ_GUEST_STATE, true);					
+	}		
+	else
 	{
 		get_guest_state_pcpu();
 	}
@@ -149,19 +146,16 @@ int hvi_set_register_rflags(int vcpu, unsigned long new_value)
 	
 	printk(KERN_ERR "<1>hvi_set_register_rflags: curr_cpu=%d, request_cpu=%d, curr_value=0x%lx, new_value=0x%lx", me, vcpu, vmcs_readl(GUEST_RFLAGS), new_value);
 	
-	//TODO: when remote cpu is paused, it is in ipi context.  guest state only contains
-	// ipi interrupt handler information, instead of info about process running when cpu
-	// is paused.  We need to fix this or remove the support of query on remote cpu.
 	if (vcpu == me)
 	{		
 		vmcs_writel(GUEST_RFLAGS, new_value);	
 	}		
-//	else
-//	{			
-//		req = per_cpu_ptr(&vcpu_req, vcpu);
-//		req->new_value = new_value;
-//		make_request_on_cpu(vcpu , VBH_REQ_SET_RFLAGS, true);
-//	}
+	else
+	{			
+		req = per_cpu_ptr(&vcpu_req, vcpu);
+		req->new_value = new_value;
+		make_request_on_cpu(vcpu , VBH_REQ_SET_RFLAGS, true);
+	}
 	
 	return 0;
 }
@@ -192,22 +186,22 @@ int hvi_set_register_rip(int vcpu, unsigned long new_value)
 					
 	me = smp_processor_id();
 	
-	req = per_cpu_ptr(&vcpu_req, vcpu);
+	printk(KERN_ERR "<1>hvi_set_register_rip: curr_cpu=%d, request_cpu=%d, new_value=0x%lx", me, vcpu, new_value);
 
-	//TODO: when remote cpu is paused, it is in ipi context.  guest state is only about
-	// ipi interrupt handler information, instead of info about process running when cpu
-	// is paused.  We need to fix this or remove the support of query on remote cpu.
 	if (vcpu == me)
 	{
 		vmcs_writel(GUEST_RIP, new_value);
+		printk(KERN_ERR "<1>hvi_set_register_rip: guest_rip=0x%lx", vmcs_readl(GUEST_RIP));
 		vcpu_ptr->skip_instruction_not_used = 1;
 	}		
-//	else
-//	{		
-//		req->new_value = new_value;
-//		vcpu_ptr->skip_instruction_not_used = 1;
-//		make_request_on_cpu(vcpu, VBH_REQ_SET_RIP, true);
-//	}
+	else
+	{		
+		req = per_cpu_ptr(&vcpu_req, vcpu);
+		req->new_value = new_value;
+		vcpu_ptr->skip_instruction_not_used = 1;
+		wmb();
+		make_request_on_cpu(vcpu, VBH_REQ_SET_RIP, true);
+	}
 	
 	return 0;
 }
@@ -216,7 +210,7 @@ EXPORT_SYMBOL(hvi_set_register_rip);
 /*
  *Pause all vcpus.
  **/
-int hvi_request_vcpu_pause(void)
+int hvi_request_vcpu_pause(int immediate)
 {
 	int ret;
 	
@@ -232,7 +226,7 @@ int hvi_request_vcpu_pause(void)
 	
 	spin_unlock(&pause_lock);
 	
-	ret = pause_other_vcpus();
+	ret = pause_other_vcpus(immediate);
 	
     return ret;
 }
@@ -247,6 +241,7 @@ int hvi_request_vcpu_resume(void)
 	ret = resume_other_vcpus();
 	
 	vcpus_locked = 0;
+
 	return ret;
 }EXPORT_SYMBOL(hvi_request_vcpu_resume);
 

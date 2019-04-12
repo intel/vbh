@@ -236,14 +236,6 @@ static unsigned int segment_limit(u16 selector)
 	return l;
 }
 
-//static inline unsigned long kvm_read_tr_base(void)
-//{
-//	u16 tr;
-//
-//	asm("str %0" : "=g"(tr));
-//	return segment_base(tr);
-//}
-
 static struct vmcs *alloc_vmcs_cpu(int cpu, struct vmcs_config *vmcs_config_ptr)
 {
 	int node = cpu_to_node(cpu);

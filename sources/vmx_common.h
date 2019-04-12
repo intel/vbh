@@ -72,13 +72,12 @@ union guest_state
 
 struct vcpu_request
 {
-	DECLARE_BITMAP(pcpu_requests, 16);  	// bitmap for all requests on a vcpu
-	int query_gstate_type;		// what guest info to get
-	int query_gstate_param;		// parameter for a specific guest info
 	unsigned long new_value;
+	DECLARE_BITMAP(pcpu_requests, 64);  	// bitmap for all requests on a vcpu
+	int query_gstate_type;					// what guest info to get
+	int query_gstate_param;					// parameter for a specific guest info
 	union guest_state guest_data;
 	int guest_data_sz;
-	//void *p_gdata;
 };
 
 struct vmcs {
@@ -104,7 +103,6 @@ extern unsigned long *vmx_eptp_pml4;
 
 extern cpu_control_params_t cr_ctrl;
 extern msr_control_params_t msr_ctrl;
-
 
 struct vmcs_config {
 	int size;
