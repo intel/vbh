@@ -193,7 +193,7 @@ int hvi_set_register_rip(int vcpu, unsigned long new_value);
 /*
  *Pause all vcpus.
  **/
-int hvi_request_vcpu_pause(void);
+int hvi_request_vcpu_pause(int immediate);
 
 /*
  *Resume paused vcpus.

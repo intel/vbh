@@ -44,6 +44,8 @@
 
 #define MOV_TO_CR		0
 
+#define EXIT_REASON_INIT        3
+
 struct vmx_capability {
 	u32 ept;
 	u32 vpid;
@@ -396,6 +398,10 @@ void vmx_switch_and_exit_handler (void)
 	case EXIT_REASON_MSR_WRITE:
 		printk(KERN_ERR "<1> vmexit_reason: MSR_WRITE.\n");
 		handle_write_msr(vcpu_ptr);
+		break;
+	case EXIT_REASON_INIT:
+		printk(KERN_ERR "<1> vmexit reason: INIT on cpu-[%d].\n", id);
+		handle_vcpu_request_hypercall(vcpu_ptr, 0);
 		break;
 	case EXIT_REASON_MONITOR_TRAP_FLAG:
 		printk(KERN_ERR "<1> vmexit_reason: MONITOR_TRAP_FLAG.\n");
