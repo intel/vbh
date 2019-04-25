@@ -79,16 +79,15 @@ struct hvi_event_descriptor {
 	__u8 padding[6];
 };
 
-typedef struct hvi_x86_gpr
-{
-	uint64_t rax;	//r0
-	uint64_t rcx;	//r1
-	uint64_t rdx;	//r2
-	uint64_t rbx;	//r3
-	uint64_t rsp;	//r4
-	uint64_t rbp;	//r5
-	uint64_t rsi;	//r6
-	uint64_t rdi;	//r7
+struct hvi_x86_gpr {
+	uint64_t rax; //r0
+	uint64_t rcx; //r1
+	uint64_t rdx; //r2
+	uint64_t rbx; //r3
+	uint64_t rsp; //r4
+	uint64_t rbp; //r5
+	uint64_t rsi; //r6
+	uint64_t rdi; //r7
 	uint64_t r8;
 	uint64_t r9;
 	uint64_t r10;
@@ -97,7 +96,7 @@ typedef struct hvi_x86_gpr
 	uint64_t r13;
 	uint64_t r14;
 	uint64_t r15;
-}hvi_x86_gpr_t;
+};
 
 struct x86_segment {
 	__u64 base;
@@ -115,11 +114,11 @@ struct x86_dtable {
 
 /* segment registers */
 struct x86_sregs {
-	struct x86_segment cs, ds, es, fs, gs, ss;	
+	struct x86_segment cs, ds, es, fs, gs, ss;
 };
 
-typedef struct x86_regs {
-	hvi_x86_gpr_t gprs;
+struct x86_regs {
+	struct hvi_x86_gpr gprs;
 	uint64_t rflags;
 	uint64_t dr7;
 	uint64_t rip;
@@ -135,10 +134,9 @@ typedef struct x86_regs {
 	uint64_t gs_base;
 	uint32_t cs_arbytes;
 	uint32_t _pad;
-} hvi_x86_registers_t;
+};
 
-typedef enum
-{
+typedef enum {
 	registers_state,
 	msr,
 	idtr,
@@ -149,36 +147,36 @@ typedef enum
 	cs_type,
 	cs_ring,
 	segment_registers,
-}hvi_query_info_e;
+} hvi_query_info_e;
 
-typedef enum
-{
+typedef enum {
 	ept_violation = 0,
 	msr_write = 1,
-	cr_write =2 ,
+	cr_write = 2,
 	xsetbv_modification = 3,
 	xcr_modification = 4,
 	breakpoint = 5,
 	vmcall = 6,
 	mtf_exit = 7,
 	max_event = 8
-}hv_event_e;
+} hv_event_e;
 
 /*
  *Prototype for event report callback function.
  **/
-typedef int (*hv_event_callback)(hv_event_e type, unsigned char* data, int size, int* allow);
+typedef int (*hv_event_callback)(hv_event_e type, unsigned char *data,
+	int size, int *allow);
 
-struct hvi_event_callback
-{
+struct hvi_event_callback {
 	hv_event_e event;
 	hv_event_callback callback;
 };
 
 /*
- *Query specific guest information. 
+ *Query specific guest information.
  **/
-int hvi_query_guest_info(int vcpu, hvi_query_info_e query_type, unsigned char* param, unsigned char* buffer, int* size);
+int hvi_query_guest_info(int vcpu, hvi_query_info_e query_type,
+	unsigned char *param, unsigned char *buffer, int *size);
 
 /*
  *Set rflags register of specified vcpu.
@@ -189,7 +187,7 @@ int hvi_set_register_rflags(int vcpu, unsigned long new_value);
  *Set rip register of specified vcpu.
  **/
 int hvi_set_register_rip(int vcpu, unsigned long new_value);
-	
+
 /*
  *Pause all vcpus.
  **/
@@ -203,22 +201,25 @@ int hvi_request_vcpu_resume(void);
 /*
  *Map a guest physical adress inside the hvi address space.
  **/
-int hvi_physmem_map_to_host(unsigned long phy_addr, unsigned long length, unsigned long flags, void** host_ptr);
+int hvi_physmem_map_to_host(unsigned long phy_addr, unsigned long length,
+	unsigned long flags, void **host_ptr);
 
 /*
  *Unmap a page which is previously mapped.
  **/
-int hvi_physmem_unmap(void** host_ptr);
+int hvi_physmem_unmap(void **host_ptr);
 
 /*
  *Give GPA address, query the EPT access rights.
  **/
-int hvi_get_ept_page_protection(unsigned long addr, unsigned char *read, unsigned char *write, unsigned char* execute);
+int hvi_get_ept_page_protection(unsigned long addr, unsigned char *read,
+	unsigned char *write, unsigned char *execute);
 
 /*
  *Modify the EPT access rights for the indicated GPA address.
  **/
-int hvi_set_ept_page_protection(unsigned long addr, unsigned char read, unsigned char write, unsigned char execute);
+int hvi_set_ept_page_protection(unsigned long addr, unsigned char read,
+	unsigned char write, unsigned char execute);
 
 /*
  *Modify whether write msr causes vmexit.
@@ -228,7 +229,8 @@ int hvi_modify_msr_write_exit(unsigned long msr, unsigned char is_enable);
 /*
  *Modify whether write cr causes vmexit.
  **/
-int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask, unsigned char is_enable);
+int hvi_modify_cr_write_exit(unsigned long cr, unsigned int mask,
+	unsigned char is_enable);
 
 /*
  *Inject a #PF in guest.
@@ -244,12 +246,13 @@ int hvi_enable_mtf(void);
 /*
  *Disable mtf.
  **/
-int hvi_disable_mtf(void);  
+int hvi_disable_mtf(void);
 
 /*
  *Register event report call back
  **/
-int hvi_register_event_callback(struct hvi_event_callback hvi_event_handlers[], size_t num_handlers);
+int hvi_register_event_callback(struct hvi_event_callback hvi_event_handlers[],
+	size_t num_handlers);
 
 /*
  *Un-register event report call back
