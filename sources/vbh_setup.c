@@ -10,19 +10,19 @@
 #include <linux/cpumask.h>
 #include <linux/sched.h>
 
-#include <asm/cpufeature.h>
+#include <linux/cpufeature.h>
 #include <asm/cpufeatures.h>
 #include <asm/desc.h>
 #include <asm/msr.h>
 #include <asm/tlbflush.h>
-#include <asm/kvm_host.h>
+#include <linux/kvm_host.h>
 #include <asm/vmx.h>
 #include <asm/msr-index.h>
 #include <asm/special_insns.h>
 
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/spinlock.h>
 #include <linux/irqflags.h>
 
@@ -45,7 +45,7 @@ struct vmx_capability {
 };
 
 DEFINE_SPINLOCK(vbh_load_lock);
-static bool vbh_loaded = 0;
+static bool vbh_loaded;
 
 static struct vmx_capability vmx_cap;
 static struct vmcs_config __percpu *vmcs_config;
@@ -69,13 +69,6 @@ static bool __read_mostly switch_on_load = 1;
 module_param_named(switch_vmx_on_load, switch_on_load, bool, 0444);
 MODULE_PARM_DESC(switch_vmx_on_load, "Switch to non root when module is load");
 
-extern void vmx_switch_and_exit_handle_vmexit(void);
-
-void setup_ept_tables(void);
-void unload_vbh_per_cpu(void *info);
-int vmx_switch_to_nonroot(void);
-bool check_vbh_status(void);
-
 static void set_msr_state(void);
 static noinline void load_guest_state_registers(void);
 static int switch_to_nonroot_per_cpu(void *data);
@@ -98,7 +91,7 @@ void vmcs_clear(void)
 			"memory");
 
 	if (error)
-		printk(KERN_ERR "kvm: vmclear fail: %p/%llx\n",
+		pr_err("kvm: vmclear fail: %p/%llx\n",
 			vcpu_ptr->pcpu_vmcs,
 			phys_addr);
 }
@@ -134,12 +127,12 @@ static int cpu_vmxon(u64 addr, int cpu)
 		: "memory");
 
 	vmxon_success = 0;
-	printk(KERN_ERR "<1>CPU-%d: vmxon has failed. rflags_value=%lx\n",
+	pr_err("<1>CPU-%d: vmxon has failed. rflags_value=%lx\n",
 				cpu, rflags_value);
 
 	asm volatile("vmxon_finish:\n");
 	if (vmxon_success)
-		printk(KERN_ERR "<1>CPU-%d: vmxon has succeeded.\n", cpu);
+		pr_err("<1>CPU-%d: vmxon has succeeded.\n", cpu);
 
 	return rflags_value == 0 ? 0 : -EIO;
 }
@@ -150,7 +143,8 @@ static u64 construct_eptp(unsigned long root_hpa)
 
 	rdmsr(MSR_IA32_VMX_EPT_VPID_CAP, vmx_cap.ept, vmx_cap.vpid);
 
-	printk(KERN_ERR "<1> vmx_capability.ept=0x%x, vmx_capability.vpid=0x%x\n", vmx_cap.ept, vmx_cap.vpid);
+	pr_err("<1> vmx_capability.ept=0x%x, vmx_capability.vpid=0x%x\n",
+		vmx_cap.ept, vmx_cap.vpid);
 
 	if (vmx_cap.ept & VMX_EPT_PAGE_WALK_4_BIT)
 		eptp = VMX_EPTP_PWL_4;
@@ -172,10 +166,10 @@ static void vmcs_load(struct vmcs *vmcs, int cpu)
 			: "=qm"(error) : "a"(&phys_addr), "m"(phys_addr)
 			: "cc", "memory");
 	if (error)
-		printk(KERN_ERR "<1> CPU-%d: vmptrld %p/%llx failed\n",
+		pr_err("<1> CPU-%d: vmptrld %p/%llx failed\n",
 					cpu, vmcs, phys_addr);
 	else
-		printk(KERN_ERR "<1> CPU-%d: vmptrld %p/%llx succeeded.\n",
+		pr_err("<1> CPU-%d: vmptrld %p/%llx succeeded.\n",
 					cpu, vmcs, phys_addr);
 
 }
@@ -260,7 +254,7 @@ static __init int adjust_vmx_controls(u32 ctl_min, u32 ctl_opt,
 
 	rdmsr(msr, vmx_msr_low, vmx_msr_high);
 
-	printk(KERN_ERR "<1> adjust_vmx_control: msr=0x%x, value=0x%llx.\n",
+	pr_err("<1> adjust_vmx_control: msr=0x%x, value=0x%llx.\n",
 				msr, (u64)vmx_msr_high << 32 | vmx_msr_low);
 
 	ctl &= vmx_msr_high; /* bit == 0 in high word ==> must be zero */
@@ -293,14 +287,15 @@ static __init void setup_vmcs_config(void *data)
 
 	// if INVPCID is disabled, return error
 	if (!is_invpcid_supported()) {
-		printk(KERN_ERR "<1> INVPCID is disabled.\n");
+		pr_err("<1> INVPCID is disabled.\n");
 		return;
 	}
 
 	min = CPU_BASED_USE_MSR_BITMAPS |
 		CPU_BASED_ACTIVATE_SECONDARY_CONTROLS;
 	opt = 0;
-	if (adjust_vmx_controls(min, opt, MSR_IA32_VMX_PROCBASED_CTLS, &_cpu_based_exec_control) < 0)
+	if (adjust_vmx_controls(min, opt,
+		MSR_IA32_VMX_PROCBASED_CTLS, &_cpu_based_exec_control) < 0)
 		return;
 
 	if (_cpu_based_exec_control & CPU_BASED_ACTIVATE_SECONDARY_CONTROLS) {
@@ -313,7 +308,9 @@ static __init void setup_vmcs_config(void *data)
 			min2 |= SECONDARY_EXEC_XSAVES;
 
 		opt2 = 0;
-		if (adjust_vmx_controls(min2, opt2, MSR_IA32_VMX_PROCBASED_CTLS2, &_cpu_based_2nd_exec_control) < 0)
+		if (adjust_vmx_controls(min2, opt2,
+			MSR_IA32_VMX_PROCBASED_CTLS2,
+			&_cpu_based_2nd_exec_control) < 0)
 			return;
 	}
 
@@ -341,19 +338,21 @@ static __init void setup_vmcs_config(void *data)
 
 	basic_msr_value = (u64)vmx_msr_high << 32 | vmx_msr_low;
 	if (basic_msr_value & VMX_BASIC_TRUE_CTLS) {
-		printk(KERN_ERR "CPU-%d: basic_msr_value=0x%llx, bit 55 is set.\n"
+		pr_err("CPU-%d: basic_msr_value=0x%llx, bit 55 is set.\n"
 					, cpu, basic_msr_value);
-		if (adjust_vmx_controls(min, opt, MSR_IA32_VMX_TRUE_PINBASED_CTLS,
-						&_pin_based_exec_control) < 0) {
-			printk(KERN_ERR "CPU-%d: Failed to set pinbased control.\n", cpu);
+		if (adjust_vmx_controls(min, opt,
+			MSR_IA32_VMX_TRUE_PINBASED_CTLS,
+			&_pin_based_exec_control) < 0) {
+			pr_err("CPU-%d: Failed to set pinbased control.\n",
+					cpu);
 			return;
 		}
 	} else {
-		printk(KERN_ERR "CPU-%d: basic_msr_value=0x%llx, bit 55 is NOT set.\n",
+		pr_err("CPU-%d: basic_msr_value=0x%llx, bit 55 is NOT set.\n",
 					cpu, basic_msr_value);
 		if (adjust_vmx_controls(min, opt, MSR_IA32_VMX_PINBASED_CTLS,
 						&_pin_based_exec_control) < 0) {
-			printk(KERN_ERR "CPU-%d: Failed to set pinbased control.\n",
+			pr_err("CPU-%d: Failed to set pinbased control.\n",
 						cpu);
 			return;
 		}
@@ -414,7 +413,8 @@ static noinline void load_guest_state_segment_registers(int cpu)
 
 	asm ("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(selector));
-	access_rights = access_rights >> 8;   //24.4.1 Guest Register State
+	//24.4.1 Guest Register State
+	access_rights = access_rights >> 8;
 	access_rights = access_rights & 0xf0ff;
 	vmcs_write32(GUEST_CS_AR_BYTES, access_rights);
 	vmcs_writel(GUEST_CS_BASE, base);
@@ -430,7 +430,8 @@ static noinline void load_guest_state_segment_registers(int cpu)
 	} else {
 		asm("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(selector));
-		access_rights = access_rights >> 8;    //24.4.1 Guest Register State
+		//24.4.1 Guest Register State
+		access_rights = access_rights >> 8;
 		access_rights = access_rights & 0xf0ff;
 	}
 
@@ -463,7 +464,8 @@ static noinline void load_guest_state_area(int cpu)
 	} else {
 		asm ("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(selector));
-		access_rights = access_rights >> 8;  //24.4.1 Guest Register State
+		//24.4.1 Guest Register State
+		access_rights = access_rights >> 8;
 		access_rights = access_rights & 0xf0ff;
 		vmcs_write32(GUEST_DS_AR_BYTES, access_rights);
 		vmcs_writel(GUEST_DS_BASE, base);
@@ -478,7 +480,8 @@ static noinline void load_guest_state_area(int cpu)
 	} else {
 		asm ("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(selector));
-		access_rights = access_rights >> 8;  //24.4.1 Guest Register State
+		//24.4.1 Guest Register State
+		access_rights = access_rights >> 8;
 		access_rights = access_rights & 0xf0ff;
 		vmcs_write32(GUEST_ES_AR_BYTES, access_rights);
 		vmcs_writel(GUEST_ES_BASE, base);
@@ -494,7 +497,8 @@ static noinline void load_guest_state_area(int cpu)
 	} else {
 		asm ("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(selector));
-		access_rights = access_rights >> 8;  //24.4.1 Guest Register State
+		//24.4.1 Guest Register State
+		access_rights = access_rights >> 8;
 		access_rights = access_rights & 0xf0ff;
 		vmcs_write32(GUEST_FS_AR_BYTES, access_rights);
 	}
@@ -510,7 +514,8 @@ static noinline void load_guest_state_area(int cpu)
 	} else {
 		asm ("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(selector));
-		access_rights = access_rights >> 8;  //24.4.1 Guest Register State
+		//24.4.1 Guest Register State
+		access_rights = access_rights >> 8;
 		access_rights = access_rights & 0xf0ff;
 		vmcs_write32(GUEST_GS_AR_BYTES, access_rights);
 	}
@@ -524,7 +529,8 @@ static noinline void load_guest_state_area(int cpu)
 	} else {
 		asm ("lar %%ax, %%rax\n"
 			: "=a"(access_rights) : "a"(tr));
-		access_rights = access_rights >> 8;  //24.4.1 Guest Register State
+		//24.4.1 Guest Register State
+		access_rights = access_rights >> 8;
 		access_rights = access_rights & 0xf0ff;
 		vmcs_writel(GUEST_TR_BASE, segment_base(tr));
 		vmcs_write32(GUEST_TR_LIMIT, segment_limit(tr));
@@ -664,15 +670,17 @@ static void load_execution_control(struct vmcs_config *vmcs_config_ptr)
 	value = 0x94006172;
 	value = value | low;
 	value = value & high;
+	//enable seconday controls
 	vmcs_write32(CPU_BASED_VM_EXEC_CONTROL,
-				vmcs_config_ptr->cpu_based_exec_ctrl);   //enable seconday controls
+				vmcs_config_ptr->cpu_based_exec_ctrl);
 
 	rdmsr(MSR_IA32_VMX_PROCBASED_CTLS2, low, high);
 	value = 0x0;
 	value = value | low;
 	value = value & high;
+	//enable seconday controls
 	vmcs_write32(SECONDARY_VM_EXEC_CONTROL,
-				vmcs_config_ptr->cpu_based_2nd_exec_ctrl);   //enable seconday controls
+				vmcs_config_ptr->cpu_based_2nd_exec_ctrl);
 
 	vmcs_write32(EXCEPTION_BITMAP, 0);
 
@@ -740,9 +748,8 @@ static void enable_feature_control(void)
 	test_bits = FEATURE_CONTROL_LOCKED;
 	test_bits |= FEATURE_CONTROL_VMXON_ENABLED_OUTSIDE_SMX;
 
-	if ((old & test_bits) != test_bits) {
+	if ((old & test_bits) != test_bits)
 		wrmsrl(MSR_IA32_FEATURE_CONTROL, old | test_bits);
-	}
 }
 
 static bool is_xsaves_supported(void)
@@ -754,7 +761,7 @@ static bool is_xsaves_supported(void)
 	if ((eax >> 3) & 1)
 		return true;
 
-	printk(KERN_ERR "<1> xsaves is not supported.\n");
+	pr_err("<1> xsaves is not supported.\n");
 	return false;
 }
 
@@ -780,23 +787,23 @@ static bool is_vmx_supported(void)
 	__cpuid(&eax, &ebx, &recx, &redx);
 
 	if (!((recx >> 5) & 1)) {
-		printk(KERN_ERR "<1>CPU doesn't support vmx.\n");
+		pr_err("<1>CPU doesn't support vmx.\n");
 		return false;
 	}
 
-	printk(KERN_ERR "<1>CPU supports vmx.\n");
+	pr_err("<1>CPU supports vmx.\n");
 
 	rdmsrl(MSR_IA32_FEATURE_CONTROL, feature_value);
 
 	if (feature_value & 1) {
 		if ((feature_value >> 2) & 1) {
-			printk("<1>MSR 0x3A:Lock bit is on. VMXON bit is on. OK\n");
+			pr_err("<1>MSR 0x3A:Lock bit is on. VMXON bit is on. OK\n");
 		} else {
-			printk("<1>MSR 0x3A:Lock bit is on. VMXON bit is off. Cannot turn on vmxon\n");
+			pr_err("<1>MSR 0x3A:Lock bit is on. VMXON bit is off. Cannot turn on vmxon\n");
 			return false;
 		}
 	} else {
-		printk("<1>MSR 0x3A:Lock bit is off. Cannot turn on vmxon\n");
+		pr_err("<1>MSR 0x3A:Lock bit is off. Cannot turn on vmxon\n");
 		return false;
 	}
 
@@ -811,7 +818,7 @@ static void enable_vmxe(void)
 	cr4_value = native_read_cr4();
 
 	if (cr4_value & X86_CR4_VMXE) {
-		printk("<1> enable_vmxe:  vmxe is already on.\n");
+		pr_err("<1> %s:  vmxe is already on.\n", __func__);
 		return;
 	}
 
@@ -819,7 +826,7 @@ static void enable_vmxe(void)
 			"bts $13, %rax\n"
 			"movq %rax, %cr4\n");
 
-	printk("<1> turned on cr4.vmxe\n");
+	pr_err("<1> turned on cr4.vmxe\n");
 }
 
 static void disable_vmxe(void)
@@ -848,19 +855,17 @@ static void setup_vmcs_memory(void)
 
 		if (!is_aligned(vcpu_ptr->vmxarea, 0x1000) ||
 					!is_aligned(phys_addr, 0x1000)) {
-			printk(KERN_ERR "<1>vmxon region address is not aligned.\n");
+			pr_err("<1>vmxon region address is not aligned.\n");
 			return;
 		}
 
 		// setup revision id in vmxon region
 		vmxon_setup_revid(vcpu_ptr->vmxarea);
-		
-		vcpu_ptr->pcpu_vmcs = alloc_vmcs_cpu(cpu, vmcs_config_ptr);
 
-		//printk(KERN_ERR "<1> CPU-%d: vmxarea=0x%p, vmxarea-physical=0x%p, pcpu_vmcs=0x%p", cpu, vcpu_ptr->vmxarea, (void *)phys_addr, vcpu_ptr->pcpu_vmcs);
+		vcpu_ptr->pcpu_vmcs = alloc_vmcs_cpu(cpu, vmcs_config_ptr);
 	}
 
-	printk(KERN_ERR "<1> Finish setup vmcs memories.\n");
+	pr_err("<1> Finish setup vmcs memories.\n");
 }
 
 static int switch_to_nonroot_per_cpu(void *data)
@@ -876,10 +881,10 @@ static int switch_to_nonroot_per_cpu(void *data)
 	cpu = get_cpu();
 	local_irq_save(flags);
 
-	printk(KERN_ERR "switch_to_nonroot_per_cpu: cpu <%d> Enter.\n", cpu);
+	pr_err("%s: cpu <%d> Enter.\n", __func__, cpu);
 
 	vcpu_ptr = this_cpu_ptr(vcpu);
-	
+
 	vmcs_config_ptr = this_cpu_ptr(vmcs_config);
 
 	native_store_gdt(this_cpu_ptr(host_gdt));
@@ -930,7 +935,7 @@ static int switch_to_nonroot_per_cpu(void *data)
 	asm("movq $vmentry_point, %rax");
 	asm("vmwrite %rax, %rdx");
 
-	printk(KERN_ERR "<1>Ready to call VMLAUNCH.\n");
+	pr_err("<1>Ready to call VMLAUNCH.\n");
 
 	asm volatile(__ex(ASM_VMX_VMLAUNCH) "\n\t");
 	asm volatile("jbe vmlaunch_fail\n");
@@ -945,19 +950,18 @@ static int switch_to_nonroot_per_cpu(void *data)
 			:
 			: "memory");
 
-	printk(KERN_ERR "<1> VMLaunch has failed, rflags_value=%lx\n",
+	pr_err("<1> VMLaunch has failed, rflags_value=%lx\n",
 					rflags_value);
 
 	// Read error
 	instruction_error_code = vmcs_readl(VM_INSTRUCTION_ERROR);
-	printk(KERN_ERR "<1> VMLaunch has failed, instruction_error_code=%d\n",
+	pr_err("<1> VMLaunch has failed, instruction_error_code=%d\n",
 					instruction_error_code);
 
 	asm volatile("vmentry_point:\n");
 
-	if (!is_vmlaunch_fail) {
-		printk(KERN_ERR "<1> CPU-%d: VmLaunch Done. Enter guest mode.\n", cpu);
-	}
+	if (!is_vmlaunch_fail)
+		pr_err("<1> CPU-%d: VmLaunch Done. Enter guest mode.\n", cpu);
 
 	bitmap_set(switch_done, cpu, 1);
 	put_cpu();
@@ -985,33 +989,32 @@ int vmx_switch_to_nonroot(void)
 	bitmap_zero(switch_done, cpus);
 
 	spin_lock(&vbh_load_lock);
-	
-	if (vbh_loaded)
-	{
-		printk(KERN_ERR "Warning: vbh is loaded already!\n");
+
+	if (vbh_loaded) {
+		pr_err("Warning: vbh is loaded already!\n");
 		spin_unlock(&vbh_load_lock);
 		return -1;
 	}
-	
+
 	for_each_online_cpu(cpu) {
-		thread_ptr = kthread_create(switch_to_nonroot_per_cpu, NULL, "vmx-switch-%d", cpu);
+		thread_ptr = kthread_create(switch_to_nonroot_per_cpu,
+			NULL, "vmx-switch-%d", cpu);
 		kthread_bind(thread_ptr, cpu);
 		wake_up_process(thread_ptr);
 	}
 
-	while (!bitmap_equal((const long unsigned *)&all_cpus,
-			(const long unsigned *)&switch_done, cpus)) {
+	while (!bitmap_equal((const unsigned long *)&all_cpus,
+		(const unsigned long *)&switch_done, cpus)) {
 		schedule();
 	}
 
 	vbh_loaded = 1;
 	spin_unlock(&vbh_load_lock);
-	
-	printk(KERN_ERR "vmx_switch_to_nonroot: exit.\n");
+
+	pr_err("%s: exit.\n", __func__);
 
 	return 0;
 }
-//EXPORT_SYMBOL(vmx_switch_to_nonroot);
 
 pgd_t *init_process_cr3(void)
 {
@@ -1027,31 +1030,31 @@ pgd_t *init_process_cr3(void)
 static int __init cpu_switch_init(void)
 {
 	vbh_loaded = 0;
-	
+
 	if (!is_vmx_supported())
 		goto err;
 
-	bitmap_fill((long unsigned *)&all_cpus, num_online_cpus());
+	bitmap_fill((unsigned long *)&all_cpus, num_online_cpus());
 
 	vcpu = alloc_percpu(struct vcpu_vmx);
 	if (vcpu == NULL) {
-		printk(KERN_ERR "<1>Cannot allocate memory for vcpu\n");
+		pr_err("<1>Cannot allocate memory for vcpu\n");
 		return -ENOMEM;
 	}
 
 	host_gdt = alloc_percpu(struct desc_ptr);
 	if (host_gdt == NULL) {
-		printk(KERN_ERR "Cannot allocate memory for host_gdt\n");
+		pr_err("Cannot allocate memory for host_gdt\n");
 		return -ENOMEM;
 	}
 
 	vmcs_config = alloc_percpu(struct vmcs_config);
 	if (vmcs_config == NULL) {
-		printk(KERN_ERR "<1>Cannot allocate memory for vmcs_config\n");
+		pr_err("<1>Cannot allocate memory for vmcs_config\n");
 		return -ENOMEM;
 	}
 
-	printk(KERN_ERR "<1> vcpu=0x%p, host_gdt=0x%p, vmcs_config=0x%p, reg_scratch=0x%p\n",
+	pr_err("<1> vcpu=0x%p, host_gdt=0x%p, vmcs_config=0x%p, reg_scratch=0x%p\n",
 			vcpu, host_gdt, vmcs_config,
 			reg_scratch);
 
@@ -1067,7 +1070,7 @@ static int __init cpu_switch_init(void)
 	memset(vmx_eptp_pml4, 0, PAGE_SIZE);
 
 	setup_ept_tables();
-	
+
 	if (switch_on_load)
 		vmx_switch_to_nonroot();
 
@@ -1081,7 +1084,7 @@ void unload_vbh_per_cpu(void *info)
 
 	// Turn off vm
 	if (vmxon_success) {
-		printk(KERN_ERR "<1> kernel_hardening_unload: Ready to send VMXOFF.\n");
+		pr_err("<1> kernel_hardening_unload: Ready to send VMXOFF.\n");
 		asm volatile(ASM_VMX_VMXOFF);
 	}
 
@@ -1101,24 +1104,22 @@ static void cpu_switch_exit(void)
 
 	cpus = num_online_cpus();
 
-	printk(KERN_ERR "<1> Trying to unload...");
+	pr_err("<1> Trying to unload...");
 
 	on_each_cpu(unload_vbh_per_cpu, NULL, true);
 
-	if (vcpu != NULL) {
+	if (vcpu != NULL)
 		free_percpu(vcpu);
-	}
 
-	if (host_gdt != NULL) {
+	if (host_gdt != NULL)
 		free_percpu(host_gdt);
-	}
 
 	if (vmcs_config != NULL)
 		free_percpu(vmcs_config);
-	
+
 	vbh_loaded = 0;
 
-	printk(KERN_ERR "module vmx-switch unloaded\n");
+	pr_err("module vmx-switch unloaded\n");
 }
 
 module_init(cpu_switch_init);

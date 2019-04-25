@@ -59,13 +59,13 @@ typedef struct
 
 union guest_state
 {
-	hvi_x86_registers_t g_states;
+	struct x86_regs g_states;
 	struct x86_sregs g_segment_registers;
 	struct x86_dtable dtr;  //gdtr or idtr
 	u64 g_msr;
 	int g_num_cpus;
 	int g_current_tid;
-	hvi_x86_gpr_t g_gprs;
+	struct hvi_x86_gpr g_gprs;
 	int g_cs_type;
 	int g_cs_ring;
 };
@@ -169,7 +169,7 @@ struct vmcs_config {
 #define VBH_REQ_INVEPT		BIT(6)
 #define VBH_REQ_GUEST_STATE	BIT(7)
 
-void monitor_cpu_events(unsigned long mask, bool enable, cpu_reg_e reg);
+
 
 static __always_inline unsigned long __vmcs_readl(unsigned long field)
 {
@@ -206,7 +206,7 @@ static __always_inline unsigned long vmcs_readl(unsigned long field)
 
 static noinline void vmwrite_error(unsigned long field, unsigned long value)
 {
-	printk(KERN_ERR "vmwrite error: reg %lx value %lx (err %d)\n",
+	pr_err("vmwrite error: reg %lx value %lx (err %d)\n",
 		field,
 		value,
 		vmcs_read32(VM_INSTRUCTION_ERROR));
@@ -252,3 +252,76 @@ static __always_inline void asm_pause_cpu(void)
 {
 	asm volatile("pause" ::: "memory");
 }
+
+extern unsigned long *vmx_msr_bitmap_switch;
+
+extern void vmx_switch_skip_instruction(void);
+
+extern unsigned long *get_ept_entry(unsigned long long gpa);
+extern void set_ept_entry_prot(unsigned long*, int, int, int);
+
+extern int get_ept_entry_prot(unsigned long entry);
+
+extern void monitor_cpu_events(unsigned long mask, bool enable, cpu_reg_e reg);
+extern void get_guest_state_pcpu(void);
+
+extern void handle_cr_monitor_req(cpu_control_params_t *cpu_param);
+
+extern void handle_msr_monitor_req(msr_control_params_t *msr_param);
+
+extern void cpu_switch_flush_tlb_smp(void);
+
+extern int pause_other_vcpus(int immediate);
+
+extern int resume_other_vcpus(void);
+
+extern void handle_msr_monitor_req(msr_control_params_t *msr_param);
+extern inline int all_vcpus_paused(void);
+extern void make_request(int request, int wait);
+extern void make_request_on_cpu(int cpu, int request, int wait);
+extern void vbh_tlb_shootdown(void);
+extern void set_guest_rip(void);
+
+extern void* get_vcpu(int cpu);
+
+extern int vmx_switch_to_nonroot(void);
+extern bool check_vbh_status(void);
+
+extern void handle_read_msr(struct vcpu_vmx *vcpu);
+extern void handle_write_msr(struct vcpu_vmx *vcpu);
+
+extern int hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value, int* allow);
+extern int hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value, int* allow);
+extern int hvi_handle_event_vmcall(void);
+
+extern void dump_entries(u64 gpa);
+extern void handle_kernel_hardening_hypercall(u64 params);
+extern void post_handle_vmexit_mov_to_cr(void);
+extern void handle_read_msr(struct vcpu_vmx *vcpu);
+extern void handle_write_msr(struct vcpu_vmx *vcpu);
+
+extern void vmx_switch_skip_instruction(void);
+
+extern void cpu_switch_flush_tlb_smp(void);
+
+extern void vbh_tlb_shootdown(void);
+
+extern void vcpu_exit_request_handler(unsigned int request);
+
+extern void asm_make_vmcall(unsigned int hypercall_id, void *params);
+
+extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
+
+extern int hvi_handle_ept_violation(__u64 gpa, __u64 gla, int *allow);
+
+extern void vmx_switch_and_exit_handle_vmexit(void);
+
+extern void setup_ept_tables(void);
+extern void unload_vbh_per_cpu(void *info);
+extern int vmx_switch_to_nonroot(void);
+extern bool check_vbh_status(void);
+
+extern void make_request(int request, int wait);
+extern void make_request_on_cpu(int cpu, int request, int wait);
+extern int pause_other_vcpus(int immediate);
+extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
