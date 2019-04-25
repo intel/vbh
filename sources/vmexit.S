@@ -39,7 +39,7 @@ ENTRY(vmx_switch_and_exit_handle_vmexit)
 	push %rax
 	push $0x10
 	push %rcx
-	
+
 	mov 0x18(%rdx), %rax
 	mov 0x10(%rdx), %rbx
 	mov 0x08(%rdx), %rcx
@@ -97,7 +97,7 @@ other_than_vmxoff:
 	mov (VCPU_REGS_R14*8)(%rcx), %r14
 	mov (VCPU_REGS_R15*8)(%rcx), %r15
 	mov (VCPU_REGS_RCX*8)(%rcx), %rcx
-//vmresume	
+//vmresume
 	.byte 0x0f, 0x01, 0xc3
 	ret
 END(vmx_switch_and_exit_handle_vmexit)
