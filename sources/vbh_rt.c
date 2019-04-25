@@ -12,19 +12,19 @@
 #include <linux/stop_machine.h>
 #include <linux/delay.h>
 
-#include <asm/cpufeature.h>
+#include <linux/cpufeature.h>
 #include <asm/cpufeatures.h>
 #include <asm/desc.h>
 #include <asm/msr.h>
 #include <asm/tlbflush.h>
-#include <asm/kvm_host.h>
+#include <linux/kvm_host.h>
 #include <asm/vmx.h>
 #include <asm/msr-index.h>
 #include <asm/special_insns.h>
 
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/spinlock.h>
 #include <linux/irqflags.h>
 
@@ -53,52 +53,23 @@ struct vmx_capability {
 
 static struct vmx_capability vmx_cap;
 
-void dump_entries(u64 gpa);
-void handle_kernel_hardening_hypercall(u64 params);
-void post_handle_vmexit_mov_to_cr(void);
-void handle_read_msr(struct vcpu_vmx *vcpu);
-void handle_write_msr(struct vcpu_vmx *vcpu);
-
-void vmx_switch_skip_instruction(void);
-
-void cpu_switch_flush_tlb_smp(void);
-
-void vbh_tlb_shootdown(void);
-
-void vcpu_exit_request_handler(unsigned int request);
-
 static inline void vbh_invept(int ext, u64 eptp, u64 gpa);
 
 static void cpu_has_vmx_invept_capabilities(bool *context, bool *global);
-
-extern void asm_make_vmcall(unsigned int hypercall_id, void *params);
-
-extern void hvi_handle_event_cr(__u16 cr, unsigned long old_value,
-			unsigned long new_value, int *allow);
-
-extern void hvi_handle_event_msr(__u32 msr, __u64 old_value,
-				__u64 new_value, int *allow);
-
-extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
-
-extern void hvi_handle_event_vmcall(void);
-
-extern int hvi_handle_ept_violation(__u64 gpa, __u64 gla, int* allow);
-
 
 unsigned long *get_scratch_register(void)
 {
 	unsigned long *reg_ptr;
 
 	reg_ptr = this_cpu_ptr(reg_scratch);
-	
+
 	return reg_ptr;
 }
 
 void *get_vcpu(int cpu)
 {
 	int me = smp_processor_id();
-	
+
 	if (cpu == me)
 		return this_cpu_ptr(vcpu);
 	else
@@ -120,7 +91,8 @@ static inline void vbh_invept(int ext, u64 eptp, u64 gpa)
 		u64 eptp, gpa;
 	} operand = { eptp, gpa };
 
-	printk(KERN_ERR "<1> cpu_switch_invept: ext=%d, eptp=0x%llx, gpa=0x%llx", ext, eptp, gpa);
+	pr_err("<1> cpu_switch_invept: ext=%d, eptp=0x%llx, gpa=0x%llx",
+		ext, eptp, gpa);
 
 	asm volatile(__ex(ASM_VMX_INVEPT)
 		:
@@ -140,7 +112,7 @@ void vbh_tlb_shootdown(void)
 	else if (context)
 		vbh_invept(VMX_EPT_EXTENT_CONTEXT, __pa(vmx_eptp_pml4), 0);
 	else
-		printk(KERN_ERR "<1> ERROR:  Unsupported EPT EXTENT!!!!\n");
+		pr_err("<1> ERROR:  Unsupported EPT EXTENT!!!!\n");
 }
 
 static void skip_emulated_instruction(struct vcpu_vmx *vcpu)
@@ -155,7 +127,7 @@ static void skip_emulated_instruction(struct vcpu_vmx *vcpu)
 	}
 }
 
-void handle_cpuid (struct vcpu_vmx *vcpu)
+void handle_cpuid(struct vcpu_vmx *vcpu)
 {
 	u32 eax, ebx, ecx, edx;
 
@@ -177,19 +149,19 @@ void handle_ept_violation(struct vcpu_vmx *vcpu)
 	unsigned long g_rsp, g_rip;
 
 	int allow = 0;
-	
+
 	g_rsp = vmcs_readl(GUEST_RSP);
 	g_rip = vmcs_readl(GUEST_RIP);
 
-	printk("EPT_VIOLATION at GPA -> 0x%llx GVA -> 0x%llx, exit_qulification = 0x%lx, G_RSP = 0x%lx, G_RIP=0x%lx\n", gpa, gla, exit_qual, g_rsp, g_rip);
+	pr_err("EPT_VIOLATION at GPA -> 0x%llx GVA -> 0x%llx, exit_qulification = 0x%lx, G_RSP = 0x%lx, G_RIP=0x%lx\n",
+		gpa, gla, exit_qual, g_rsp, g_rip);
 
-	if (hvi_handle_ept_violation(gpa, gla, &allow)) {
-		printk(KERN_ERR "vmx-root: hvi_handle_ept_violation failed\n");
-    }
+	if (hvi_handle_ept_violation(gpa, gla, &allow))
+		pr_err("vmx-root: hvi_handle_ept_violation failed\n");
 
     // Skip the instruction regardless the value of allow.
     // TODO: skip only if allow is false.
-    vmx_switch_skip_instruction();
+	vmx_switch_skip_instruction();
 }
 
 void handle_vmcall(struct vcpu_vmx *vcpu)
@@ -200,7 +172,8 @@ void handle_vmcall(struct vcpu_vmx *vcpu)
 	hypercall_id = vcpu->regs[VCPU_REGS_RAX];
 	params = vcpu->regs[VCPU_REGS_RBX];
 
-	printk(KERN_ERR "<1> handle_vmcall: hypercall_id = 0x%llx, params = %p", hypercall_id, (void *)params);
+	pr_err("<1> %s: hypercall_id = 0x%llx, params = %p",
+		__func__, hypercall_id, (void *)params);
 	switch (hypercall_id) {
 	case KERNEL_HARDENING_HYPERCALL:
 		handle_kernel_hardening_hypercall(params);
@@ -226,7 +199,8 @@ void handle_read_msr(struct vcpu_vmx *vcpu)
 	rdmsr(msr, low, high);
 
 	// Debug only
-	printk(KERN_ERR "<1>handle_read_msr: Value of msr 0x%lx: low=0x%x, high=0x%x\n", msr, low, high);
+	pr_err("<1> %s: Value of msr 0x%lx: low=0x%x, high=0x%x\n",
+		__func__, msr, low, high);
 
 	// save msr value into rax and rdx
 	vcpu->regs[VCPU_REGS_RAX] = low;
@@ -254,9 +228,6 @@ void handle_write_msr(struct vcpu_vmx *vcpu)
 	rdmsr(msr, low, high);
 	old_value = (unsigned long)high << 32 | low;
 
-	// Debug only
-	printk(KERN_ERR "<1>handle_write_msr: Update msr 0x%lx: old_value=0x%lx, new_value=0x%lx\n", msr, old_value, new_value);
-
 	hvi_handle_event_msr(msr, old_value, new_value, &allow);
 
 	// hvi decides whether wrmsr is permitted or not.
@@ -282,7 +253,7 @@ void handle_cr(struct vcpu_vmx *vcpu)
 	int allow = 0;
 
 	int cpu = smp_processor_id();
-	
+
 	exit_qual = vmcs_readl(EXIT_QUALIFICATION);
 	cr = exit_qual & 15;
 	type = (exit_qual >> 4)	& 3;
@@ -295,15 +266,17 @@ void handle_cr(struct vcpu_vmx *vcpu)
 			allow = 0;
 			old_value = vmcs_readl(GUEST_CR0);
 			val = vcpu->regs[reg];
-			printk(KERN_ERR "<1> cpu-%d EXIT on cr0 access: old value %lx, new value %lx", cpu, old_value, val);
-			
+			pr_err("<1> cpu-%d EXIT on cr0 access: old value %lx, new value %lx",
+				cpu, old_value, val);
+
 			// report event
 			hvi_handle_event_cr(cr, old_value, val, &allow);
-			
-			// write the new value to shadow register only if allowed
+
+			// write the new value to shadow register
+			// only if allowed
 			if (allow)
 				vmcs_writel(CR0_READ_SHADOW, val);
-			
+
 			// skip next instruction
 			post_handle_vmexit_mov_to_cr();
 			break; // CR0
@@ -311,15 +284,17 @@ void handle_cr(struct vcpu_vmx *vcpu)
 			allow = 0;
 			old_value = vmcs_readl(GUEST_CR4);
 			val = vcpu->regs[reg];
-			printk(KERN_ERR "<1> cpu-%d EXIT on cr4 access: old value %lx, new value %lx", cpu, old_value, val);
-			
+			pr_err("<1> cpu-%d EXIT on cr4 access: old value %lx, new value %lx",
+				cpu, old_value, val);
+
 			// report event
 			hvi_handle_event_cr(cr, old_value, val, &allow);
-			
-			// write the new value to shadow register only if allowed
+
+			// write the new value to shadow register
+			// only if allowed
 			if (allow)
 				vmcs_writel(CR4_READ_SHADOW, val);
-			
+
 			// skip next instruction
 			post_handle_vmexit_mov_to_cr();
 			break;	// CR4
@@ -334,13 +309,14 @@ void handle_cr(struct vcpu_vmx *vcpu)
 void vcpu_exit_request_handler(unsigned int request)
 {
 	int cpu;
-	
+
 	cpu = smp_processor_id();
 
 	// use vmcall to enter root mode
 	asm_make_vmcall(request, NULL);
-	
-	printk(KERN_ERR "<1> CPU-[%d] vcpu_exit_request_handler is back to guest. \n", cpu);
+
+	pr_err("<1> CPU-[%d] %s is back to guest.\n",
+		cpu, __func__);
 }
 
 void vmx_switch_and_exit_handler (void)
@@ -356,7 +332,7 @@ void vmx_switch_and_exit_handler (void)
 	reg_area = per_cpu_ptr(reg_scratch, id);
 
 	if (reg_area == NULL) {
-		printk(KERN_ERR "vmx_switch_and_exit_handler: Failed to get reg_area!\n");
+		pr_err("%s: Failed to get reg_area!\n", __func__);
 		return;
 	}
 
@@ -371,54 +347,54 @@ void vmx_switch_and_exit_handler (void)
 
 	switch (vmexit_reason) {
 	case EXIT_REASON_CPUID:
-		//printk(KERN_ERR "<1> vmexit_reason: CPUID.\n");
 		handle_cpuid(vcpu_ptr);
 		break;
 	case EXIT_REASON_EPT_MISCONFIG:
 		gpa = vmcs_read64(GUEST_PHYSICAL_ADDRESS);
-		printk(KERN_ERR "<1> vmexit_reason: guest physical address 0x%llx\n resulted in EPT_MISCONFIG\n", gpa);
+		pr_err("<1> vmexit_reason: guest physical address 0x%llx resulted in EPT_MISCONFIG\n",
+			gpa);
 		dump_entries(gpa);
 		break;
 	case EXIT_REASON_EPT_VIOLATION:
-		printk(KERN_ERR "<1> vmexit_reason: EPT_VIOLATION\n");
+		pr_err("<1> vmexit_reason: EPT_VIOLATION\n");
 		handle_ept_violation(vcpu_ptr);
 		break;
 	case EXIT_REASON_VMCALL:
-		printk(KERN_ERR "<1> vmexit_reason: VMCALL\n");
+		pr_err("<1> vmexit_reason: VMCALL\n");
 		handle_vmcall(vcpu_ptr);
 		break;
 	case EXIT_REASON_CR_ACCESS:
-		printk(KERN_ERR "<1> vmexit_reason: CR_ACCESS.\n");
+		pr_err("<1> vmexit_reason: CR_ACCESS.\n");
 		handle_cr(vcpu_ptr);
 		break;
 	case EXIT_REASON_MSR_READ:
-		printk(KERN_ERR "<1> vmexit_reason: MSR_READ.\n");
+		pr_err("<1> vmexit_reason: MSR_READ.\n");
 		handle_read_msr(vcpu_ptr);
 		break;
 	case EXIT_REASON_MSR_WRITE:
-		printk(KERN_ERR "<1> vmexit_reason: MSR_WRITE.\n");
 		handle_write_msr(vcpu_ptr);
 		break;
 	case EXIT_REASON_INIT:
-		printk(KERN_ERR "<1> vmexit reason: INIT on cpu-[%d].\n", id);
+		pr_err("<1> vmexit reason: INIT on cpu-[%d].\n", id);
 		handle_vcpu_request_hypercall(vcpu_ptr, 0);
 		break;
 	case EXIT_REASON_MONITOR_TRAP_FLAG:
-		printk(KERN_ERR "<1> vmexit_reason: MONITOR_TRAP_FLAG.\n");
+		pr_err("<1> vmexit_reason: MONITOR_TRAP_FLAG.\n");
 		handle_mtf(vcpu_ptr);
 		break;
-	case EXIT_REASON_VMOFF:  // Should never reach here
-		printk(KERN_ERR "<1> vmexit_reason: vmxoff.\n");
+	case EXIT_REASON_VMOFF:
+		// Should never reach here
+		pr_err("<1> vmexit_reason: vmxoff.\n");
 		break;
 	default:
-		printk(KERN_ERR "<1> CPU-%d: Unhandled vmexit reason 0x%x.\n", id, vmexit_reason);
+		pr_err("<1> CPU-%d: Unhandled vmexit reason 0x%x.\n",
+			id, vmexit_reason);
 		break;
 	}
 
-	if (vcpu_ptr->instruction_skipped == true) {
+	if (vcpu_ptr->instruction_skipped == true)
 		vmcs_writel(GUEST_RIP, reg_area[VCPU_REGS_RIP]);
-	}
-	
+
 	put_cpu();
 }
 
