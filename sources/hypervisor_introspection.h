@@ -268,3 +268,8 @@ int hvi_switch_to_nonroot(void);
  *Check whether vbh is loaded or not.
  **/
 int hvi_is_vbh_loaded(void);
+
+/*
+* Inject trap in guest
+**/
+int hvi_inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2);

@@ -451,3 +451,9 @@ int hvi_is_vbh_loaded(void)
 	return check_vbh_status();
 }
 EXPORT_SYMBOL(hvi_is_vbh_loaded);
+
+int hvi_inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2)
+{
+    return inject_trap(vcpu_nr, trap_number, error_code, cr2);
+}
+EXPORT_SYMBOL(hvi_inject_trap);
