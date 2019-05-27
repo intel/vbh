@@ -29,6 +29,7 @@
 #include <linux/irqflags.h>
 
 #include "vmx_common.h"
+#include "vbh_status.h"
 
 #define __ex(x) x
 
@@ -176,6 +177,36 @@ void handle_cpuid(struct vcpu_vmx *vcpu)
 	skip_emulated_instruction(vcpu);
 }
 
+//	Description:	A method for handling guest software exceptions
+int handle_exception_exit(void)
+{
+	int error = 0;
+    exception_additional_info additional_info = {0};
+
+    vm_entry_int_info interruption_information = 
+		vm_entry_info_unpack(vmcs_read32(VM_EXIT_INTR_INFO));
+
+	u32 interruption_error_code = vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+
+	int allow = 0;
+	error = hvi_handle_exception(interruption_information, interruption_error_code, &allow);
+	if (error) {
+		pr_err("vmx-root: %s failed with error: %d\n", __func__, error);
+		return error;
+	} else if (allow) {		
+		//	Reinject the exception
+        additional_info.exception_error_code = interruption_error_code;
+		mark_exception_for_injection(this_cpu_ptr(vcpu), interruption_information.fields.vector, additional_info);
+	}
+
+    if (!allow)
+    {
+		// In this case we want to skip the instruction that generated the exception that was handled 
+        vmx_switch_skip_instruction();
+    }
+
+    return error;
+}
 void handle_ept_violation(struct vcpu_vmx *vcpu)
 {
 	unsigned long exit_qual = vmcs_readl(EXIT_QUALIFICATION);
@@ -382,6 +413,10 @@ void vmx_switch_and_exit_handler (void)
 	vcpu_ptr->skip_instruction_not_used = false;
 
 	switch (vmexit_reason) {
+	case EXIT_REASON_EXCEPTION_NMI:
+		pr_err("<1> vmexit_reason: EXIT_REASON_EXCEPTION_NMI or EXCEPTION_EXIT\n");
+		handle_exception_exit();
+		break;
 	case EXIT_REASON_CPUID:
 		handle_cpuid(vcpu_ptr);
 		break;
@@ -425,6 +460,7 @@ void vmx_switch_and_exit_handler (void)
 	default:
 		pr_err("<1> CPU-%d: Unhandled vmexit reason 0x%x.\n",
 			id, vmexit_reason);
+        vmx_switch_skip_instruction();
 		break;
 	}
 

@@ -132,6 +132,8 @@ typedef enum {
 	CPU_MONITOR_REQ = 1,
 	MSR_MONITOR_REQ,
 	MONITOR_REQ_END,
+	VMCS_UPDATE_VMCS
+
 }hypercall_id_e;
 
 typedef struct {
@@ -160,6 +162,36 @@ typedef struct
 	vmcall_params_t call_params;
 	unsigned call_type;
 } vmcall_t;
+
+typedef struct 
+{
+    u32 update_exception_bitmap : 1;
+    u32 update_exception_pagefault_mask : 1;
+    u32 update_exception_pagefault_match : 1;
+}exception_bitmap_update_flags;
+
+typedef struct exception_bitmap_params
+{
+    u32 update_flags;
+    u32 ex_bitmap_structure;
+    u32 pagefault_mask;
+    u32 pagefault_match;
+}exception_bitmap_params_t;
+
+static __always_inline u32 update_flags_pack(exception_bitmap_update_flags flags)
+{
+    return ((flags.update_exception_bitmap << 0) | (flags.update_exception_pagefault_mask << 1) | (flags.update_exception_pagefault_match << 2));
+}
+
+static __always_inline exception_bitmap_update_flags update_flags_unpack(u32 raw)
+{
+    exception_bitmap_update_flags flags = { 0 };
+    flags.update_exception_bitmap = !!(raw & BIT(0));
+    flags.update_exception_pagefault_mask = !!(raw & BIT(1));
+    flags.update_exception_pagefault_match = !!(raw & BIT(2));
+
+    return flags;
+}
 
 union guest_state
 {
@@ -212,6 +244,7 @@ extern unsigned long *vmx_eptp_pml4;
 
 extern cpu_control_params_t cr_ctrl;
 extern msr_control_params_t msr_ctrl;
+extern exception_bitmap_params_t exception_ctrl;
 
 struct vmcs_config {
 	int size;
@@ -269,14 +302,15 @@ struct vmcs_config {
 #define SMAP BIT(21)
 
 /* vbh_req bitmask*/
-#define VBH_REQ_PAUSE		BIT(0)
-#define VBH_REQ_RESUME		BIT(1)
-#define VBH_REQ_SET_RFLAGS	BIT(2)
-#define VBH_REQ_SET_RIP		BIT(3)
-#define VBH_REQ_MODIFY_MSR	BIT(4)
-#define VBH_REQ_MODIFY_CR	BIT(5)
-#define VBH_REQ_INVEPT		BIT(6)
-#define VBH_REQ_GUEST_STATE	BIT(7)
+#define VBH_REQ_PAUSE					BIT(0)
+#define VBH_REQ_RESUME					BIT(1)
+#define VBH_REQ_SET_RFLAGS				BIT(2)
+#define VBH_REQ_SET_RIP					BIT(3)
+#define VBH_REQ_MODIFY_MSR				BIT(4)
+#define VBH_REQ_MODIFY_CR				BIT(5)
+#define VBH_REQ_INVEPT					BIT(6)
+#define VBH_REQ_GUEST_STATE				BIT(7)
+#define VBH_REQ_MODIFY_EXCEPTION_BITMAP	BIT(8)
 
 
 
@@ -436,3 +470,8 @@ extern int pause_other_vcpus(int immediate);
 extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
 
 extern int inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2);
+
+extern int hvi_handle_exception(vm_entry_int_info exception_info, __u32 interruption_error_code, int *allow);
+extern int handle_ex_bitmap_update_hypercall(exception_bitmap_params_t *exception_bitmap_update_params);
+
+#endif

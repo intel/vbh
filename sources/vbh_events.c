@@ -1,6 +1,5 @@
 #include <linux/slab.h>
-
-#include "hypervisor_introspection.h"
+#include "vbh_status.h"
 #include "vmx_common.h"
 
 extern struct hvi_event_callback global_event_callbacks[];
@@ -53,6 +52,16 @@ int hvi_handle_ept_violation(__u64 gpa, __u64 gla, int *allow)
 
 	return hvi_report_event(ept_violation, (void *)&ept_violation_event,
 		sizeof(struct hvi_event_ept_violation), allow);
+}
+
+int hvi_handle_exception(vm_entry_int_info exception_info, __u32 interruption_error_code, int* allow)
+{
+	struct hvi_event_exception exception_event;
+
+	exception_event.exception_number = exception_info.fields.vector;
+	exception_event.interruption_error_code = interruption_error_code;
+
+    return hvi_report_event(exception, &exception_event, sizeof(exception_event), allow);
 }
 
 static int hvi_report_event(hv_event_e event, void *data, int size, int *allow)
