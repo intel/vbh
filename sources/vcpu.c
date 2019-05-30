@@ -9,6 +9,7 @@
 
 #include "vmx_common.h"
 #include "hypervisor_introspection.h"
+#include "vbh_status.h"
 
 // The first timeout is 10 us
 #define INIT_IPI_TIMEOUT_1				10
@@ -21,6 +22,7 @@
 
 cpu_control_params_t cr_ctrl;
 msr_control_params_t msr_ctrl;
+exception_bitmap_params_t exception_ctrl;
 
 DEFINE_PER_CPU(struct vcpu_request, vcpu_req);
 
@@ -40,6 +42,8 @@ static void vbh_timer_set(struct timeval *start);
 static int vbh_timed_out(int timeout_in_ns, struct timeval *start);
 
 inline int all_vcpus_paused(void);
+
+int handle_ex_bitmap_update_hypercall(exception_bitmap_params_t *exception_bitmap_update_params);
 
 inline int all_vcpus_paused(void)
 {
@@ -369,6 +373,13 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 				pr_err("<1>handle_vcpu_request: MODIFY_MSR on vcpu=%d.\n", me);
 
 				handle_msr_monitor_req(&msr_ctrl);
+			}
+
+			if (test_and_clear_bit(VBH_REQ_MODIFY_EXCEPTION_BITMAP, req->pcpu_requests))
+			{
+				pr_err("handle_vcpu_request: VBH_REQ_MODFY_EXCEPTION_BITMAP on vcpu=%d.\n", me);
+
+				handle_ex_bitmap_update_hypercall(&exception_ctrl);
 			}
 
 			if (test_and_clear_bit(VBH_REQ_RESUME, req->pcpu_requests)) {

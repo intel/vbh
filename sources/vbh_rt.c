@@ -29,6 +29,7 @@
 #include <linux/irqflags.h>
 
 #include "vmx_common.h"
+#include "vbh_status.h"
 
 #define __ex(x) x
 
@@ -52,6 +53,41 @@ struct vmx_capability {
 };
 
 static struct vmx_capability vmx_cap;
+
+static int inject_pending_vcpu_exceptions(struct vcpu_vmx *vcpu);
+static int inject_exception(struct vcpu_vmx *vcpu, u32 exception, u32 error_code);
+static int mark_exception_for_injection(struct vcpu_vmx *vcpu, u32 exception, exception_additional_info additional_info);
+
+typedef struct _exception_details
+{
+    char    *name;
+    u8      is_available;
+    u8      has_error_code;
+    u8      has_specific_info;
+}exception_details;
+
+static const exception_details exception_info[NUMBER_OF_RESERVED_EXCEPTIONS] = 
+{
+    [X86_TRAP_DE] =     {.name = "Divide Error",                        .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_DB] =     {.name = "Debug Exception",                     .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_NMI] =    {.name = "NMI Interrupt",                       .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_BP] =     {.name = "Breakpoint",                          .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_OF] =     {.name = "Overflow",                            .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_BR] =     {.name = "Bound Range Exceeded",                .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_UD] =     {.name = "Invalid Opcode",                      .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_NM] =     {.name = "Device Not Available",                .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_DF] =     {.name = "Double Fault",                        .is_available = 1, .has_error_code = 1, .has_specific_info = 0},
+    [X86_TRAP_TS] =     {.name = "Invalid TSS",                         .is_available = 1, .has_error_code = 1, .has_specific_info = 0},
+    [X86_TRAP_NP] =     {.name = "Segment Not Present",                 .is_available = 1, .has_error_code = 1, .has_specific_info = 0},
+    [X86_TRAP_SS] =     {.name = "Stack-Segment Fault",                 .is_available = 1, .has_error_code = 1, .has_specific_info = 0},
+    [X86_TRAP_GP] =     {.name = "General Protection",                  .is_available = 1, .has_error_code = 1, .has_specific_info = 0},
+    [X86_TRAP_PF] =     {.name = "Page Fault",                          .is_available = 1, .has_error_code = 1, .has_specific_info = 1},
+    [X86_TRAP_MF] =     {.name = "Math Fault",                          .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_AC] =     {.name = "Alignment Check",                     .is_available = 1, .has_error_code = 1, .has_specific_info = 0},
+    [X86_TRAP_MC] =     {.name = "Machine Check",                       .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+    [X86_TRAP_XF] =     {.name = "SIMD Floating-Point Exception",       .is_available = 1, .has_error_code = 0, .has_specific_info = 0},
+};
+
 
 static inline void vbh_invept(int ext, u64 eptp, u64 gpa);
 
@@ -141,6 +177,36 @@ void handle_cpuid(struct vcpu_vmx *vcpu)
 	skip_emulated_instruction(vcpu);
 }
 
+//	Description:	A method for handling guest software exceptions
+int handle_exception_exit(void)
+{
+	int error = 0;
+    exception_additional_info additional_info = {0};
+
+    vm_entry_int_info interruption_information = 
+		vm_entry_info_unpack(vmcs_read32(VM_EXIT_INTR_INFO));
+
+	u32 interruption_error_code = vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+
+	int allow = 0;
+	error = hvi_handle_exception(interruption_information, interruption_error_code, &allow);
+	if (error) {
+		pr_err("vmx-root: %s failed with error: %d\n", __func__, error);
+		return error;
+	} else if (allow) {		
+		//	Reinject the exception
+        additional_info.exception_error_code = interruption_error_code;
+		mark_exception_for_injection(this_cpu_ptr(vcpu), interruption_information.fields.vector, additional_info);
+	}
+
+    if (!allow)
+    {
+		// In this case we want to skip the instruction that generated the exception that was handled 
+        vmx_switch_skip_instruction();
+    }
+
+    return error;
+}
 void handle_ept_violation(struct vcpu_vmx *vcpu)
 {
 	unsigned long exit_qual = vmcs_readl(EXIT_QUALIFICATION);
@@ -321,6 +387,7 @@ void vcpu_exit_request_handler(unsigned int request)
 
 void vmx_switch_and_exit_handler (void)
 {
+    int error = 0;
 	unsigned long *reg_area;
 	struct vcpu_vmx *vcpu_ptr;
 	u32 vmexit_reason;
@@ -346,6 +413,10 @@ void vmx_switch_and_exit_handler (void)
 	vcpu_ptr->skip_instruction_not_used = false;
 
 	switch (vmexit_reason) {
+	case EXIT_REASON_EXCEPTION_NMI:
+		pr_err("<1> vmexit_reason: EXIT_REASON_EXCEPTION_NMI or EXCEPTION_EXIT\n");
+		handle_exception_exit();
+		break;
 	case EXIT_REASON_CPUID:
 		handle_cpuid(vcpu_ptr);
 		break;
@@ -389,8 +460,16 @@ void vmx_switch_and_exit_handler (void)
 	default:
 		pr_err("<1> CPU-%d: Unhandled vmexit reason 0x%x.\n",
 			id, vmexit_reason);
+        vmx_switch_skip_instruction();
 		break;
 	}
+
+    // At the end of every vmexit, inject pending interrupts/exceptions
+    error = inject_pending_vcpu_exceptions(vcpu_ptr);
+    if (error)
+    {
+        pr_err("inject_pending_vcpu_exceptions failed with error = 0x%016X !\n", error);
+    }
 
 	if (vcpu_ptr->instruction_skipped == true)
 		vmcs_writel(GUEST_RIP, reg_area[VCPU_REGS_RIP]);
@@ -404,4 +483,197 @@ void vmx_switch_skip_instruction(void)
 
 	vcpu_ptr = this_cpu_ptr(vcpu);
 	skip_emulated_instruction(vcpu_ptr);
+}
+
+int inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2)
+{
+    struct vcpu_vmx *vcpu_ptr = NULL;
+    exception_additional_info additional_info = {0};
+
+    vcpu_ptr = (struct vcpu_vmx*)get_vcpu(vcpu_nr);
+    if(vcpu_ptr != this_cpu_ptr(vcpu))
+    {
+        // Function not implemented
+        // For now we can only inject on the current vcpu.
+        return -ENOSYS;
+    }
+
+    additional_info.exception_error_code = error_code;
+    switch (trap_number)
+    {
+        case X86_TRAP_PF:
+        {
+            additional_info.specific_additional_info.page_fault_specific.virtual_address = cr2;
+            set_bit(virtual_address, additional_info.specific_additional_info.page_fault_specific.field_is_ok);
+            
+            break;
+        }
+        default:
+        {
+            break;
+        }
+    }
+
+    return mark_exception_for_injection(vcpu_ptr, trap_number, additional_info);
+}
+
+static int mark_exception_for_injection(struct vcpu_vmx *vcpu, u32 exception, exception_additional_info additional_info)
+{	
+    if ((exception >= NUMBER_OF_RESERVED_EXCEPTIONS)|| (!(exception_info[exception].is_available)))
+    {
+        return -EINVAL;
+    }
+
+    vcpu->vcpu_exception.exception_injection_mask |= VCPU_INJECT_EXCEPTION_MASK(exception);
+    vcpu->vcpu_exception.additional_info[exception] = additional_info;
+    
+    return 0;
+}
+
+static int inject_pending_vcpu_exceptions(struct vcpu_vmx *vcpu)
+{
+    // The order is the following, based on Intel System Programming Manual:
+    // Chapter 6.9: Priority Among Simultaneous Exceptions and Interrupts
+    //   INIT / SIPI
+    //   Breakpoint
+    //   NMI
+    //   Hardware interrupts (PIC, LAPIC)
+    //   Low priority exceptions (GP etc)
+
+    //
+    //  1. Hardware resets / MC
+    //  2. Trap on TSS
+    //  3. External hardware interventions (flush, stopclk, SMI, INIT)
+    //  4. Traps on the previous instruction (breakpoints, debug trap exceptions)
+    //  5. NMI
+    //  6. Maskable hardware interrupts
+    //  7. Code breakpoint fault
+    //  8. Faults from fetching next instruction (code-segment limit violation, code page fault)
+    //  9. Faults from decoding next instruction (instruction length > 15, invalid opcode, coprocessor not available)
+    // 10. Fault on executing an instruction (overflow, bound error, invalid TSS, segment not present, stack fault, GP, data page fault,
+    //     alignment check, x87 FPU FP exception, SIMD FP exception)
+    //
+	int error = 0;
+    exception_additional_info additional_info;
+
+    if (vcpu == NULL)
+    {
+        return -EINVAL;
+    }
+
+    // If there's nothing in pending
+    if (vcpu->vcpu_exception.exception_injection_mask == 0x0)
+    {
+        return 0;
+    }
+
+    if (vcpu->vcpu_exception.exception_injection_mask & VCPU_INJECT_EXCEPTION_MASK(X86_TRAP_PF))
+    {
+        additional_info = vcpu->vcpu_exception.additional_info[X86_TRAP_PF];
+        
+        // Reset the injection flag.
+        vcpu->vcpu_exception.exception_injection_mask &= ~(VCPU_INJECT_EXCEPTION_MASK(X86_TRAP_PF));
+
+        // Effectively inject a PF
+        error = inject_exception(vcpu, X86_TRAP_PF, additional_info.exception_error_code);
+        if (error)
+        {
+            pr_err("inject_exception failed with error = 0x%016X !\n", error);
+			return error;
+        }
+
+        // Handle specific info, if exist and valid
+        if(!(exception_info[X86_TRAP_PF].has_specific_info))
+        {
+            return 0;
+        }
+
+        //
+        // If inject_exception succeeded, then we can handle exception custom informations
+        //
+        // Is virtual_address field from additional_info valid?
+        if(test_bit(virtual_address, additional_info.specific_additional_info.page_fault_specific.field_is_ok))
+        {
+            vcpu->regs[VCPU_REGS_CR2] = additional_info.specific_additional_info.page_fault_specific.virtual_address;
+        }
+
+        return 0;
+    }
+
+    // Debug exception
+    if (vcpu->vcpu_exception.exception_injection_mask & VCPU_INJECT_EXCEPTION_MASK(X86_TRAP_BP))
+    {
+        // Reset the injection flag.
+        vcpu->vcpu_exception.exception_injection_mask &= ~(VCPU_INJECT_EXCEPTION_MASK(X86_TRAP_BP));
+
+        // Effectively inject
+        error = inject_exception(vcpu, X86_TRAP_BP, 0);
+        if (error)
+        {
+            pr_err("inject_exception failed with error = 0x%016X !\n", error);
+			return error;
+        }
+        
+        return 0;
+    }
+
+	// Command is not implemened
+	return -EOPNOTSUPP;
+}
+
+static int inject_exception(struct vcpu_vmx *vcpu, u32 exception, u32 error_code)
+{
+    u64 guest_cr0;
+    u32 entry_interruption_information_raw = 0;
+    vm_entry_int_info entry_interruption_information;
+
+    printk(KERN_INFO "inject_exception exception = 0x%016X, name = %s\n", exception, exception_info[exception].name);
+    
+    entry_interruption_information.value = 0;
+
+    // Read guest cr0
+    guest_cr0 = vmcs_readl(GUEST_CR0);
+
+    // Populate interruption information fields
+    entry_interruption_information.fields.valid = 1;
+    entry_interruption_information.fields.vector = exception;
+
+    // If ProtectedMode bit is set in CR0 (bit0) and the vector is at most 31,
+    // the event should be injected as a HardwareException
+    if ((guest_cr0 & PE) == 0)
+    {
+        entry_interruption_information.fields.interruption_type = INTERRUPTION_TYPE_EXTERNAL_INTERRUPT;
+        entry_interruption_information.fields.deliver_error_code = 0;
+        
+        goto inject;
+    }
+
+    if(exception == X86_TRAP_BP)
+    {
+        // Software exception
+        entry_interruption_information.fields.interruption_type = INTERRUPTION_TYPE_SOFTWARE_EXCEPTION;
+
+        // If VM entry successfully injects (with no nested exception) an event with interruption type software
+        // interrupt, privileged software exception, or software exception, the current guest RIP is incremented by the
+        // VM-entry instruction length before being pushed on the stack.
+        vmcs_write32(VM_ENTRY_INSTRUCTION_LEN, 0);
+
+        goto inject;
+    }
+    else
+    {
+        entry_interruption_information.fields.interruption_type = INTERRUPTION_TYPE_HARDWARE_EXCEPTION;
+    }
+    
+    if (exception_info[exception].has_error_code)
+    {
+        entry_interruption_information.fields.deliver_error_code = 1;
+        vmcs_write32(VM_ENTRY_EXCEPTION_ERROR_CODE, error_code);
+    }
+
+inject:
+    entry_interruption_information_raw = vm_entry_info_pack(entry_interruption_information);
+    vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, entry_interruption_information_raw);
+
+    return 0;
 }

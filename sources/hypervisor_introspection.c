@@ -4,6 +4,7 @@
 #include "hypervisor_introspection.h"
 #include "vmx_common.h"
 #include "offsets.h"
+#include "vbh_status.h"
 
 #define __SUCCESS(x)			((x) >= 0)
 
@@ -315,6 +316,43 @@ int hvi_modify_msr_write_exit(unsigned long msr, unsigned char is_enable)
 }
 EXPORT_SYMBOL(hvi_modify_msr_write_exit);
 
+//	Description: 	Main method for updating the exception bitmap on each vcpu
+//	In:				update_info = pointer to data used to control the update of the exception bitmap,
+//								 page fault mask, page fault match
+//	Out:			0 if success, else error			
+int hvi_modify_exception_exiting(struct exception_bitmap_params *update_info)
+{
+	int error = 0;
+
+	// If the processors are not currently paused, we cannot update the vcpus
+	if (!all_vcpus_paused())
+	{		
+		pr_err("%s: Error.  Could not pause all vcpus.\n", __func__);
+		return -EPROCNSTOP;
+	}
+
+	printk(KERN_INFO "[INFO] Update vmcs on all cpus.\n");
+
+	exception_ctrl.update_flags = update_info->update_flags;
+	exception_ctrl.ex_bitmap_structure = update_info->ex_bitmap_structure;
+	exception_ctrl.pagefault_mask = update_info->pagefault_mask;
+	exception_ctrl.pagefault_match = update_info->pagefault_match;
+	
+	wmb();
+
+	error = handle_ex_bitmap_update_hypercall(update_info);
+	if (error)
+	{
+		pr_err("%s: failed with error %d\n", __func__, error);
+		return error;
+	}
+
+	make_request(VBH_REQ_MODIFY_EXCEPTION_BITMAP, true);
+
+    return error;
+}
+EXPORT_SYMBOL(hvi_modify_exception_exiting);
+
 /*
  *Modify whether write indicated cr causes vmexit.
  **/
@@ -451,3 +489,9 @@ int hvi_is_vbh_loaded(void)
 	return check_vbh_status();
 }
 EXPORT_SYMBOL(hvi_is_vbh_loaded);
+
+int hvi_inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2)
+{
+    return inject_trap(vcpu_nr, trap_number, error_code, cr2);
+}
+EXPORT_SYMBOL(hvi_inject_trap);

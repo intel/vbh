@@ -2,6 +2,7 @@
 #include <linux/smp.h>
 #include <asm/vmx.h>
 #include "vmx_common.h"
+#include "vbh_status.h"
 
 static void enable_msr_control(unsigned long msr, unsigned long *bitmap);
 static void disable_msr_control(unsigned long msr, unsigned long *bitmap);
@@ -58,6 +59,36 @@ void handle_kernel_hardening_hypercall(u64 params)
 	default:
 		break;
 	}
+}
+
+//	Description:	The method called from vmx-root in order to update the exception bitmap,
+//					page fault code match and page fault code mask 
+//	In:				exception_bitmap_update_params = pointer to a exception_bitmap_params_t structure that contains data by
+//					which the exception bitmap will be updated
+//	Out:			0 if success, else error
+int handle_ex_bitmap_update_hypercall(exception_bitmap_params_t *exception_bitmap_update_params)
+{
+	exception_bitmap_update_flags flags;
+
+	flags = update_flags_unpack(exception_bitmap_update_params->update_flags);
+	
+	if (flags.update_exception_bitmap)
+	{
+		printk(KERN_INFO "Update exception bitmap on cpu %d.\n", smp_processor_id());
+		vmcs_write32(EXCEPTION_BITMAP, exception_bitmap_update_params->ex_bitmap_structure);
+	}
+	if (flags.update_exception_pagefault_mask)
+	{
+		printk(KERN_INFO "Update exception page fault mask on cpu %d.\n", smp_processor_id());
+		vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, exception_bitmap_update_params->pagefault_mask);
+	}
+	if (flags.update_exception_pagefault_match)
+	{
+		printk(KERN_INFO "Update exception page fault match on cpu %d.\n", smp_processor_id());
+		vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, exception_bitmap_update_params->pagefault_match);
+	}
+
+	return 0;
 }
 
 void vbh_update_cr_mask(bool enable, unsigned long mask,
