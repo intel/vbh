@@ -1,10 +1,114 @@
+#ifndef _VMX_COMMON_H_
+#define _VMX_COMMON_H_
+
 #include <linux/percpu.h>
 #include <linux/semaphore.h>
 #include <linux/workqueue.h>
 #include <asm/vmx.h>
+#include <asm/traps.h>
 
 #include "offsets.h"
 #include "hypervisor_introspection.h"
+
+/* Get exception mask for X. See exception_injection_mask field in struct vcpu_vmx */
+#define VCPU_INJECT_EXCEPTION_MASK(X)       (BIT(X))	
+#define NUMBER_OF_RESERVED_EXCEPTIONS       32
+#define MOST_INSIGNIFICANT_N_BITS_MASK(N)   (BIT(N) - 1)
+
+/*
+    Custom additional info structure per exception. 
+    Fields in each structure can be garbage or good to use.
+    In order to see that, at the end of every structure we
+    can find an BITMAP. If bit k is set, field k is not garbage.
+    
+    TODO: Each new field included in the structure 
+    must also be included in the structure-specific enumeration.
+    The fields in the enumeration and the structure MUST HAVE the same order!  
+*/
+
+enum page_fault_field_encoding
+{
+    /* Write fields from page_fault_additional_info 
+    in the same order */
+    virtual_address,
+    page_fault_field_encoding_end
+};
+
+typedef struct _page_fault_additional_info
+{
+    u64         virtual_address;                                            /* Value to set CR2 */
+
+    /* See  page_fault_field_encoding */
+    DECLARE_BITMAP(field_is_ok, page_fault_field_encoding_end);             /* Bitmap to see if a field in struct is garbage or good to use */
+}page_fault_additional_info;
+
+typedef struct _exception_additional_info
+{
+    /* Common fields here */
+    u32     exception_error_code;       /* Exception error code - valid only for some exceptions. */
+
+    /* Specific fields per exception here.
+    If the byte has_specific_info is set in global vector exception_info, 
+    then a structure specific to that exception must be found in the union below. */
+    union
+    {
+        page_fault_additional_info  page_fault_specific;
+    } specific_additional_info;
+}exception_additional_info;
+
+typedef enum _INTERRUPTION_TYPE
+{
+    INTERRUPTION_TYPE_EXTERNAL_INTERRUPT                = 0,
+    INTERRUPTION_TYPE_NON_MASKABLE_INTERRUPT            = 2,
+    INTERRUPTION_TYPE_HARDWARE_EXCEPTION,
+    INTERRUPTION_TYPE_SOFTWARE_INTERRUPT,
+    INTERRUPTION_TYPE_PRIVILEGED_SOFTWARE_EXCEPTION,
+    INTERRUPTION_TYPE_SOFTWARE_EXCEPTION,
+    INTERRUPTION_TYPE_OTHER_EVENT,
+}INTERRUPTION_TYPE;
+
+typedef union _vm_entry_int_info
+{
+    struct
+    {
+        u32           vector                :       8;
+        u32           interruption_type     :       3;
+        u32           deliver_error_code    :       1;
+        u32           reserved              :       19;
+        u32           valid                 :       1;
+    }fields;
+
+    u32               value;
+} vm_entry_int_info;
+
+/*  Bitfields problem: compiler might lay the bit field out differently 
+    depending on the endianness of the target platform.
+    We need pack/unpack functions to maintain compatibility. */
+static __always_inline u32 vm_entry_info_pack(vm_entry_int_info vm_entry_info)
+{
+    return ((vm_entry_info.fields.vector << 0) | (vm_entry_info.fields.interruption_type << 8) | (vm_entry_info.fields.deliver_error_code << 11) | (vm_entry_info.fields.valid << 31));
+}
+
+static __always_inline vm_entry_int_info vm_entry_info_unpack(u32 raw)
+{
+    vm_entry_int_info vmEntryInfo = { 0 };
+
+    vmEntryInfo.fields.vector = raw & MOST_INSIGNIFICANT_N_BITS_MASK(8);
+    raw >>= 8;
+
+    vmEntryInfo.fields.interruption_type = raw & MOST_INSIGNIFICANT_N_BITS_MASK(3);
+    raw >>= 3;
+
+    vmEntryInfo.fields.deliver_error_code = raw & MOST_INSIGNIFICANT_N_BITS_MASK(1);
+    raw >>= 1;
+
+    vmEntryInfo.fields.reserved = raw & MOST_INSIGNIFICANT_N_BITS_MASK(19);
+    raw >>= 19;
+
+    vmEntryInfo.fields.valid = raw & MOST_INSIGNIFICANT_N_BITS_MASK(1);
+
+    return vmEntryInfo;
+}
 
 typedef enum {
 	CPU_REG_CR0 = 0,
@@ -28,6 +132,8 @@ typedef enum {
 	CPU_MONITOR_REQ = 1,
 	MSR_MONITOR_REQ,
 	MONITOR_REQ_END,
+	VMCS_UPDATE_VMCS
+
 }hypercall_id_e;
 
 typedef struct {
@@ -56,6 +162,36 @@ typedef struct
 	vmcall_params_t call_params;
 	unsigned call_type;
 } vmcall_t;
+
+typedef struct 
+{
+    u32 update_exception_bitmap : 1;
+    u32 update_exception_pagefault_mask : 1;
+    u32 update_exception_pagefault_match : 1;
+}exception_bitmap_update_flags;
+
+typedef struct exception_bitmap_params
+{
+    u32 update_flags;
+    u32 ex_bitmap_structure;
+    u32 pagefault_mask;
+    u32 pagefault_match;
+}exception_bitmap_params_t;
+
+static __always_inline u32 update_flags_pack(exception_bitmap_update_flags flags)
+{
+    return ((flags.update_exception_bitmap << 0) | (flags.update_exception_pagefault_mask << 1) | (flags.update_exception_pagefault_match << 2));
+}
+
+static __always_inline exception_bitmap_update_flags update_flags_unpack(u32 raw)
+{
+    exception_bitmap_update_flags flags = { 0 };
+    flags.update_exception_bitmap = !!(raw & BIT(0));
+    flags.update_exception_pagefault_mask = !!(raw & BIT(1));
+    flags.update_exception_pagefault_match = !!(raw & BIT(2));
+
+    return flags;
+}
 
 union guest_state
 {
@@ -87,12 +223,17 @@ struct vmcs {
 };
 
 struct vcpu_vmx {
-	struct vmcs *pcpu_vmcs;
-	struct vmcs *vmxarea;
-	u64 vcpu_stack;
-	unsigned long *regs;
-	bool instruction_skipped;
-	bool skip_instruction_not_used;
+    struct vmcs     *pcpu_vmcs;
+    struct vmcs     *vmxarea;
+    u64             vcpu_stack;
+    unsigned long   *regs;
+    bool            instruction_skipped;
+    bool            skip_instruction_not_used;
+    struct
+    {
+        u32                         exception_injection_mask;                       /* Each bit selects an exception. If the bit is set, the according exception will be injected in guest.*/
+        exception_additional_info   additional_info[NUMBER_OF_RESERVED_EXCEPTIONS]; /* Exception additional info. Common & specific per exception */
+    }vcpu_exception;
 };
 
 DECLARE_PER_CPU(struct vcpu_request, vcpu_req);
@@ -103,6 +244,7 @@ extern unsigned long *vmx_eptp_pml4;
 
 extern cpu_control_params_t cr_ctrl;
 extern msr_control_params_t msr_ctrl;
+extern exception_bitmap_params_t exception_ctrl;
 
 struct vmcs_config {
 	int size;
@@ -160,14 +302,15 @@ struct vmcs_config {
 #define SMAP BIT(21)
 
 /* vbh_req bitmask*/
-#define VBH_REQ_PAUSE		BIT(0)
-#define VBH_REQ_RESUME		BIT(1)
-#define VBH_REQ_SET_RFLAGS	BIT(2)
-#define VBH_REQ_SET_RIP		BIT(3)
-#define VBH_REQ_MODIFY_MSR	BIT(4)
-#define VBH_REQ_MODIFY_CR	BIT(5)
-#define VBH_REQ_INVEPT		BIT(6)
-#define VBH_REQ_GUEST_STATE	BIT(7)
+#define VBH_REQ_PAUSE					BIT(0)
+#define VBH_REQ_RESUME					BIT(1)
+#define VBH_REQ_SET_RFLAGS				BIT(2)
+#define VBH_REQ_SET_RIP					BIT(3)
+#define VBH_REQ_MODIFY_MSR				BIT(4)
+#define VBH_REQ_MODIFY_CR				BIT(5)
+#define VBH_REQ_INVEPT					BIT(6)
+#define VBH_REQ_GUEST_STATE				BIT(7)
+#define VBH_REQ_MODIFY_EXCEPTION_BITMAP	BIT(8)
 
 
 
@@ -325,3 +468,10 @@ extern void make_request(int request, int wait);
 extern void make_request_on_cpu(int cpu, int request, int wait);
 extern int pause_other_vcpus(int immediate);
 extern void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params);
+
+extern int inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2);
+
+extern int hvi_handle_exception(vm_entry_int_info exception_info, __u32 interruption_error_code, int *allow);
+extern int handle_ex_bitmap_update_hypercall(exception_bitmap_params_t *exception_bitmap_update_params);
+
+#endif

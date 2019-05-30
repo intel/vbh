@@ -29,6 +29,8 @@
 #define KVI_CPL_KERNEL						0
 #define KVI_CPL_USER						3
 
+struct exception_bitmap_params;
+
 struct hvi_event_cr {
 	__u16 cr;
 	__u16 padding[3];
@@ -38,6 +40,11 @@ struct hvi_event_cr {
 
 struct hvi_event_breakpoint {
 	__u64 gpa;
+};
+
+struct hvi_event_exception {
+	__u32 exception_number;
+	__u32 interruption_error_code;
 };
 
 struct hvi_event_ept_violation {
@@ -155,7 +162,7 @@ typedef enum {
 	cr_write = 2,
 	xsetbv_modification = 3,
 	xcr_modification = 4,
-	breakpoint = 5,
+	exception = 5,
 	vmcall = 6,
 	mtf_exit = 7,
 	max_event = 8
@@ -268,3 +275,13 @@ int hvi_switch_to_nonroot(void);
  *Check whether vbh is loaded or not.
  **/
 int hvi_is_vbh_loaded(void);
+
+/*
+* Inject trap in guest
+**/
+int hvi_inject_trap(int vcpu_nr, u8 trap_number, u32 error_code, u64 cr2);
+
+/*
+* Choose the exceptions on which to exit
+**/
+int hvi_modify_exception_exiting(struct exception_bitmap_params *update_info);
