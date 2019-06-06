@@ -247,6 +247,9 @@ void handle_vmcall(struct vcpu_vmx *vcpu)
 	case VCPU_REQUEST_HYPERCALL:
 		handle_vcpu_request_hypercall(vcpu, params);
 		break;
+	case DFO_HYPERCALL:
+		hvi_handle_event_dfo((int *)params);
+		break;
 	default:
 		hvi_handle_event_vmcall();
 		break;

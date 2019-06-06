@@ -36,6 +36,13 @@ int hvi_handle_event_msr(__u32 msr, __u64 old_value,
 		sizeof(struct hvi_event_msr), allow);
 }
 
+int hvi_handle_event_dfo(int *params)
+{
+	int allow;
+
+	return hvi_report_event(vmcall, params, sizeof(int *), &allow);
+}
+
 int hvi_handle_event_vmcall(void)
 {
 	int allow;

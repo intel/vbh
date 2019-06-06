@@ -126,6 +126,7 @@ typedef enum
 }msr_reg_e;
 
 #define KERNEL_HARDENING_HYPERCALL  40
+#define DFO_HYPERCALL				42
 #define VCPU_REQUEST_HYPERCALL		60
 
 typedef enum {
@@ -436,6 +437,7 @@ extern void handle_write_msr(struct vcpu_vmx *vcpu);
 extern int hvi_handle_event_cr(__u16 cr, unsigned long old_value, unsigned long new_value, int* allow);
 extern int hvi_handle_event_msr(__u32 msr, __u64 old_value, __u64 new_value, int* allow);
 extern int hvi_handle_event_vmcall(void);
+extern int hvi_handle_event_dfo(int *params);
 
 extern void dump_entries(u64 gpa);
 extern void handle_kernel_hardening_hypercall(u64 params);
