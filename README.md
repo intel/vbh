@@ -1,7 +1,7 @@
 # Virtualization Based Hardening
 
 
-## Description
+## Description (POC only)
 Virtualization Base Hardening (VBH) utilizes Intel Virtualization Technology to provide an infrastructure for other parties to build security policies (such as introspection engine) on top of it in order to protect hardware (Intel platform only), kernel and native container/user space apps.  It is implemented as an out-of tree Linux module and supports Linux version 4.4 or above.  It has 2 components: 
 1. A slim hypervisor, when installed, turns the host into guest
 2. APIs to query and control the hypervisor.  The APIs supports the following functionalities:
