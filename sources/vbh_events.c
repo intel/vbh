@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/slab.h>
 #include "vbh_status.h"
 #include "vmx_common.h"
@@ -40,7 +42,7 @@ int hvi_handle_event_dfo(int *params)
 {
 	int allow;
 
-	return hvi_report_event(vmcall, params, sizeof(int *), &allow);
+	return hvi_report_event(vmcall, params, 8, &allow);
 }
 
 int hvi_handle_event_vmcall(void)

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -13,7 +15,6 @@
 #include "hypervisor_introspection.h"
 #include "vmx_common.h"
 
-MODULE_LICENSE("Proprietary");
 
 #define CHECK_BIT_IS_SET(var,pos) (((var) & (1<<(pos))) >> pos)
 
@@ -39,7 +40,7 @@ static int cpu_under_test;
 
 static int done;
 
-static volatile int rip_test_done;
+static int rip_test_done;
 
 static unsigned long saved_rflags;
 
@@ -225,7 +226,7 @@ static int set_rflags_test_event_handler(hv_event_e type, unsigned char *data, i
 	
 	assert(result == 0);
 		
-	rflags = ((hvi_x86_registers_t*)buffer)->rflags;
+	rflags = ((struct x86_regs*)buffer)->rflags;
 	
 	saved_rflags = rflags;
 	

@@ -1,14 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
+#include <linux/slab.h>
 
 #include "hypervisor_introspection.h"
 #include "vmx_common.h"
 #include "vbh_test_shared.h"
 
-MODULE_LICENSE("Proprietary");
 
 static bool pause_from_guest = 0;
 

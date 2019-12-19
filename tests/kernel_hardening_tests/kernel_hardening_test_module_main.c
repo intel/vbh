@@ -1,14 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kthread.h>
+#include <linux/slab.h>
 
 #include <asm/msr-index.h>
 
 #include "hypervisor_introspection.h"
 #include "vmx_common.h"
 #include "vbh_test_shared.h"
-
-MODULE_LICENSE("Proprietary");
 
 #define		SUCCESS						0
 

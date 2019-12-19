@@ -222,7 +222,8 @@ int hvi_physmem_map_to_host(unsigned long phy_addr, unsigned long length,
 	unsigned long flags, void **host_ptr)
 {
     // todo: perform some checks first, e.g. phy_addr is valid
-	*host_ptr = (void *)__va(phy_addr);
+    	if (host_ptr != NULL)
+		*host_ptr = (void *)__va(phy_addr);
 
 	return (host_ptr == NULL);
 }

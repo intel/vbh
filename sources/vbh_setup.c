@@ -1124,4 +1124,4 @@ static void cpu_switch_exit(void)
 
 module_init(cpu_switch_init);
 module_exit(cpu_switch_exit);
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/kernel.h>
 #include <linux/smp.h>
 #include <asm/vmx.h>
@@ -131,7 +133,7 @@ void vbh_update_msr_control(bool enable, unsigned long msr, unsigned int type)
 		__func__, enable, msr, type);
 
 	if (type == MSR_TYPE_R) {
-		if (msr >= LOW_MSR_RANGE_LOW && msr <= LOW_MSR_RANGE_HIGH) {
+		if (msr <= LOW_MSR_RANGE_HIGH) {
 			if (enable)
 				enable_msr_control(msr,
 				vmx_msr_bitmap_switch + 0x000 / f);
@@ -148,8 +150,7 @@ void vbh_update_msr_control(bool enable, unsigned long msr, unsigned int type)
 				vmx_msr_bitmap_switch + 0x400 / f);
 		}
 	} else if (type == MSR_TYPE_W) {
-		if (msr >= LOW_MSR_RANGE_LOW &&
-			msr <= LOW_MSR_RANGE_HIGH) {
+			if(msr <= LOW_MSR_RANGE_HIGH) {
 			if (enable)
 				enable_msr_control(msr,
 				vmx_msr_bitmap_switch + 0x800 / f);

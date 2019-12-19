@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/ioport.h>
@@ -69,7 +71,7 @@ static int get_resource_by_name(const char *name, struct resource **resource)
 					break;
 				}
 
-				child = child->sibling;
+				entry = child->sibling;
 			}
 		}
 

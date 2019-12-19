@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -12,7 +14,6 @@
 #include "vmx_common.h"
 
 
-MODULE_LICENSE("Proprietary");
 
 static struct hvi_event_callback dummy_event_handlers[1];
 
@@ -74,7 +75,7 @@ static void get_gpr_registers_test(int cpu)
 	
 	u64 expected_rsp, actual_rsp;
 	
-	hvi_x86_gpr_t actual;
+	struct hvi_x86_gpr actual;
 	
 	// guest's rsp is also guest state area
 	expected_rsp = vmcs_read64(GUEST_RSP);
@@ -268,7 +269,7 @@ static void get_current_tid_test(int cpu)
 
 static void get_guest_state_test(int cpu)
 {
-	hvi_x86_registers_t actual;
+	struct x86_regs actual;
 	int size = sizeof(actual);
 	
 	int result;
