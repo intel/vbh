@@ -5,7 +5,8 @@ PWD=$(shell pwd)
 
 INCLUDES = -I.
 
-ccflags-y += $(INCLUDES) -ggdb -O0 -Wall
+ccflags-y += $(INCLUDES) -O2 -Wall -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security
+ldflags-y += -z noexecstack -z relro -z now
 
 obj-m += vmx-switch.o
 
