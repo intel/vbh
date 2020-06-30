@@ -47,6 +47,10 @@
 
 #define EXIT_REASON_INIT        3
 
+#define EXIT_REASON_INIT        3
+#define VMX_AR_DPL_SHIFT        5
+#define VMX_AR_DPL(ar)          (((ar) >> VMX_AR_DPL_SHIFT) & 3)
+
 struct vmx_capability {
 	u32 ept;
 	u32 vpid;
@@ -151,6 +155,14 @@ void vbh_tlb_shootdown(void)
 		pr_err("<1> ERROR:  Unsupported EPT EXTENT!!!!\n");
 }
 
+static u32 get_cpl(void)
+{
+	u32 access_rights;
+	access_rights = vmcs_read32(GUEST_SS_AR_BYTES);
+	
+	return VMX_AR_DPL(access_rights);
+}
+
 static void skip_emulated_instruction(struct vcpu_vmx *vcpu)
 {
 	unsigned long rip;
@@ -235,6 +247,11 @@ void handle_vmcall(struct vcpu_vmx *vcpu)
 	u64 hypercall_id;
 	u64 params;
 
+	int cpl = get_cpl();
+
+	if (cpl != 0)
+		goto out;
+
 	hypercall_id = vcpu->regs[VCPU_REGS_RAX];
 	params = vcpu->regs[VCPU_REGS_RBX];
 
@@ -254,6 +271,8 @@ void handle_vmcall(struct vcpu_vmx *vcpu)
 		hvi_handle_event_vmcall();
 		break;
 	}
+
+out:
 	skip_emulated_instruction(vcpu);
 }
 
