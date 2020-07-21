@@ -3,7 +3,6 @@
 
 #include "hypervisor_introspection.h"
 #include "vmx_common.h"
-#include "offsets.h"
 #include "vbh_status.h"
 
 #define __SUCCESS(x)			((x) >= 0)

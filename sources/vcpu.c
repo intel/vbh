@@ -40,8 +40,8 @@ static int vbh_cpu_present_to_apicid(int cpu);
 
 static void pause_vcpu(void *info);
 
-static void vbh_timer_set(struct timeval *start);
-static int vbh_timed_out(int timeout_in_ns, struct timeval *start);
+static void vbh_timer_set(struct timespec *start);
+static int vbh_timed_out(int timeout_in_ns, struct timespec *start);
 
 inline int all_vcpus_paused(void);
 
@@ -57,18 +57,18 @@ static int vbh_cpu_present_to_apicid(int cpu)
 	return cpu_data(cpu).apicid;
 }
 
-static void vbh_timer_set(struct timeval *start)
+static void vbh_timer_set(struct timespec *start)
 {
-	do_gettimeofday(start);
+	getnstimeofday(start);
 }
 
-static int vbh_timed_out(int timeout_in_us, struct timeval *start)
+static int vbh_timed_out(int timeout_in_us, struct timespec *start)
 {
-	struct timeval end;
+	struct timespec end;
 
-	do_gettimeofday(&end);
+	getnstimeofday(&end);
 
-	if ((timeval_to_ns(&end) - timeval_to_ns(start))/1000 >= timeout_in_us)
+	if ((end.tv_nsec - start->tv_nsec)/1000 >= timeout_in_us)
 		return true;
 
 	return false;
@@ -172,7 +172,7 @@ static int _immediate_exit_with_timeout(int timeout_in_us)
 	int cpu;
 
 	int online_cpus;
-	struct timeval start;
+	struct timespec start;
 
 	online_cpus = num_online_cpus();
 
@@ -198,13 +198,13 @@ static int immediate_exit(void)
 {
 	DECLARE_BITMAP(un_paused_vcpus, NR_CPUS);
 
-	struct timeval start, end;
+	struct timespec start, end;
 	unsigned long elapsed;
 	int ret;
 
 	char buf[256] = { 0 };
 
-	do_gettimeofday(&start);
+	getnstimeofday(&start);
 
 	// take chance the first time
 	if (_immediate_exit_with_timeout(INIT_IPI_TIMEOUT_1) == 0) {
@@ -235,9 +235,9 @@ static int immediate_exit(void)
 	ret = -1;
 
 done:
-	do_gettimeofday(&end);
+	getnstimeofday(&end);
 
-	elapsed = timeval_to_ns(&end) - timeval_to_ns(&start);
+	elapsed = end.tv_nsec - start.tv_nsec;
 	bitmap_print_to_pagebuf(true, buf, paused_vcpus, num_online_cpus());
 	pr_err("<1> %s: It takes %ld ns to pause vcpus: %s.\n",
 		__func__, elapsed, buf);
@@ -248,7 +248,7 @@ int pause_other_vcpus(int immediate)
 {
 	char cpumask_print_buf[100] = { 0 };
 
-	struct timeval start, end;
+	struct timespec start, end;
 	unsigned long elapsed;
 
 	int cpu;
@@ -287,7 +287,7 @@ int pause_other_vcpus(int immediate)
 		__func__, cpumask_print_buf,
 		irqs_disabled() ? "disabled" : "enabled");
 
-	do_gettimeofday(&start);
+	getnstimeofday(&start);
 
 	// send ipi to all other vcpus
 	on_each_cpu_mask(&pause_mask, pause_vcpu, NULL, 0);
@@ -295,9 +295,9 @@ int pause_other_vcpus(int immediate)
 	// wait until all cpus enter root mode
 	spin_until_cond(bitmap_full(paused_vcpus, online_cpus));
 
-	do_gettimeofday(&end);
+	getnstimeofday(&end);
 
-	elapsed = timeval_to_ns(&end) - timeval_to_ns(&start);
+	elapsed = end.tv_nsec - start.tv_nsec;
 
 	pr_err("<1> %s: It takes %ld ns to pause all vcpus.\n",
 		__func__, elapsed);
@@ -307,7 +307,7 @@ int pause_other_vcpus(int immediate)
 
 void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 {
-	struct timeval start, end;
+	struct timespec start, end;
 	unsigned long paused_time;
 	struct vcpu_request *req;
 
@@ -317,7 +317,7 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 
 	req = this_cpu_ptr(&vcpu_req);
 
-	do_gettimeofday(&start);
+	getnstimeofday(&start);
 
 	do {
 		// If I have a pending request
@@ -398,9 +398,9 @@ void handle_vcpu_request_hypercall(struct vcpu_vmx *vcpu, u64 params)
 
 	} while (pause_requested);
 
-	do_gettimeofday(&end);
+	getnstimeofday(&end);
 
-	paused_time = timeval_to_ns(&end) - timeval_to_ns(&start);
+	paused_time = end.tv_nsec - start.tv_nsec;
 
 	pr_err("<1>vcpu-[%d] has been paused %ld ns. Resuming....\n",
 		me, paused_time);
