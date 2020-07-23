@@ -2,7 +2,6 @@
 #include <linux/cpumask.h>
 #include <linux/smp.h>
 
-#include "offsets.h"
 #include "vmx_common.h"
 #include "hypervisor_introspection.h"
 
@@ -196,9 +195,9 @@ static void get_cs_type(struct vcpu_request *req)
  **/
 static void get_cs_ring(struct vcpu_request *req)
 {
-	int cs_selector;
+	u16 cs_selector;
 
-	cs_selector = vmcs_read32(GUEST_CS_SELECTOR);
+	cs_selector = vmcs_read16(GUEST_CS_SELECTOR);
 
 	if ((cs_selector & SEGMENT_CPL_MASK) == KVI_CPL_KERNEL)
 		req->guest_data.g_cs_ring = KVI_CPL_KERNEL;

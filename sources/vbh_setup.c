@@ -15,7 +15,6 @@
 #include <asm/desc.h>
 #include <asm/msr.h>
 #include <asm/tlbflush.h>
-#include <linux/kvm_host.h>
 #include <asm/vmx.h>
 #include <asm/msr-index.h>
 #include <asm/special_insns.h>
@@ -28,8 +27,6 @@
 
 #include "vmx_common.h"
 
-#define __ex(x) x
-
 #define VMX_EPTP_MT_WB						0x6ull
 #define VMX_EPTP_PWL_4						0x18ull
 
@@ -39,16 +36,11 @@
 #define is_aligned(POINTER, BYTE_COUNT) \
 		(((uintptr_t)(const void *)(POINTER)) % (BYTE_COUNT) == 0)
 
-struct vmx_capability {
-	u32 ept;
-	u32 vpid;
-};
-
-DEFINE_SPINLOCK(vbh_load_lock);
+//DEFINE_SPINLOCK(vbh_load_lock);
 static bool vbh_loaded;
 
 static struct vmx_capability vmx_cap;
-static struct vmcs_config __percpu *vmcs_config;
+static struct vmcs_config __percpu *vbh_vmcs_config;
 struct vcpu_vmx __percpu *vcpu;
 static int vmxon_success;
 static struct desc_ptr __percpu *host_gdt;
@@ -74,23 +66,23 @@ static noinline void load_guest_state_registers(void);
 static int switch_to_nonroot_per_cpu(void *data);
 static bool is_xsaves_supported(void);
 static bool is_invpcid_supported(void);
+static bool is_rdtscp_supported(void);
 
-void vmcs_clear(void)
+void vbh_vmcs_clear(void)
 {
 	struct vcpu_vmx *vcpu_ptr;
 	u64 phys_addr;
-	u8 error;
+	u8 ret;
 
 	vcpu_ptr = this_cpu_ptr(vcpu);
 	phys_addr = __pa(vcpu_ptr->pcpu_vmcs);
 
-	asm volatile(__ex(ASM_VMX_VMCLEAR_RAX) "; setna %0"
-		      : "=qm"(error) : "a"(&phys_addr),
-			"m"(phys_addr)
-			: "cc",
-			"memory");
+	asm volatile("vmclear %[pa]; setna %[ret]"
+			: [ret]"=rm"(ret)
+			: [pa]"m"(phys_addr)
+			: "cc", "memory");
 
-	if (error)
+	if (ret)
 		pr_err("kvm: vmclear fail: %p/%llx\n",
 			vcpu_ptr->pcpu_vmcs,
 			phys_addr);
@@ -111,9 +103,7 @@ static int cpu_vmxon(u64 addr, int cpu)
 	vmxon_success = 1;
 
 	// Do vmxon
-	asm volatile (ASM_VMX_VMXON_RAX
-			: : "a"(&addr), "m"(addr)
-			: "memory", "cc");
+	asm volatile ("vmxon %0" : : "m"(addr));
 
 	// Check whether vmxon succeeds or not
 	asm volatile("jbe vmxon_fail\n");
@@ -162,7 +152,7 @@ static void vmcs_load(struct vmcs *vmcs, int cpu)
 	u64 phys_addr = __pa(vmcs);
 	u8 error;
 
-	asm volatile (__ex(ASM_VMX_VMPTRLD_RAX) "; setna %0"
+	asm volatile (__ex(VBH_ASM_VMX_VMPTRLD_RAX) "; setna %0"
 			: "=qm"(error) : "a"(&phys_addr), "m"(phys_addr)
 			: "cc", "memory");
 	if (error)
@@ -246,7 +236,7 @@ static struct vmcs *alloc_vmcs_cpu(int cpu, struct vmcs_config *vmcs_config_ptr)
 	return vmcs;
 }
 
-static __init int adjust_vmx_controls(u32 ctl_min, u32 ctl_opt,
+static int adjust_vmx_controls(u32 ctl_min, u32 ctl_opt,
 				      u32 msr, int *result)
 {
 	u32 vmx_msr_low, vmx_msr_high;
@@ -268,7 +258,7 @@ static __init int adjust_vmx_controls(u32 ctl_min, u32 ctl_opt,
 	return 0;
 }
 
-static __init void setup_vmcs_config(void *data)
+static void setup_vmcs_config(void *data)
 {
 	u32 vmx_msr_low, vmx_msr_high;
 	u32 min, opt, min2, opt2;
@@ -281,7 +271,7 @@ static __init void setup_vmcs_config(void *data)
 	int cpu;
 	struct vmcs_config *vmcs_config_p;
 
-	vmcs_config_p = this_cpu_ptr(vmcs_config);
+	vmcs_config_p = this_cpu_ptr(vbh_vmcs_config);
 
 	cpu = smp_processor_id();
 
@@ -306,6 +296,9 @@ static __init void setup_vmcs_config(void *data)
 
 		if (is_xsaves_supported())
 			min2 |= SECONDARY_EXEC_XSAVES;
+
+		if (is_rdtscp_supported())
+			min2 |= SECONDARY_EXEC_RDTSCP;
 
 		opt2 = 0;
 		if (adjust_vmx_controls(min2, opt2,
@@ -681,19 +674,15 @@ static void load_execution_control(struct vmcs_config *vmcs_config_ptr)
 	//enable seconday controls
 	vmcs_write32(SECONDARY_VM_EXEC_CONTROL,
 				vmcs_config_ptr->cpu_based_2nd_exec_ctrl);
+	pr_info("%s: cpu_based_2nd_exec_ctrl 0x%x\n",
+		__func__, vmcs_config_ptr->cpu_based_2nd_exec_ctrl);
 
 	vmcs_write32(EXCEPTION_BITMAP, 0);
 
-	vmx_io_bitmap_a_switch = (unsigned long *)__get_free_page(GFP_KERNEL);
-	memset(vmx_io_bitmap_a_switch, 0, PAGE_SIZE);
 	vmcs_write64(IO_BITMAP_A, __pa(vmx_io_bitmap_a_switch));
 
-	vmx_io_bitmap_b_switch = (unsigned long *)__get_free_page(GFP_KERNEL);
-	memset(vmx_io_bitmap_b_switch, 0, PAGE_SIZE);
 	vmcs_write64(IO_BITMAP_B, __pa(vmx_io_bitmap_b_switch));
 
-	vmx_msr_bitmap_switch = (unsigned long *)__get_free_page(GFP_KERNEL);
-	memset(vmx_msr_bitmap_switch, 0, PAGE_SIZE);
 	vmcs_write64(MSR_BITMAP, __pa(vmx_msr_bitmap_switch));
 
 	eptp = construct_eptp(__pa(vmx_eptp_pml4));
@@ -720,8 +709,7 @@ void load_vmentry_control(struct vmcs_config *vmcs_config_ptr)
 	value = value & high;
 
 	vmcs_write32(VM_ENTRY_CONTROLS, vmcs_config_ptr->vmentry_ctrl);
-	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD,
-				vmcs_config_ptr->vmentry_intr_info_ctrl);
+	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, 0);
 	vmcs_write32(VM_ENTRY_MSR_LOAD_COUNT, 0);
 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, 0);
 }
@@ -761,7 +749,7 @@ static bool is_xsaves_supported(void)
 	if ((eax >> 3) & 1)
 		return true;
 
-	pr_err("<1> xsaves is not supported.\n");
+	pr_info("<1> xsaves is not supported.\n");
 	return false;
 }
 
@@ -774,6 +762,20 @@ static bool is_invpcid_supported(void)
 	if ((ebx >> 10) & 1)
 		return true;
 
+	pr_info("<1> invpcid is not supported.\n");
+	return false;
+}
+
+static bool is_rdtscp_supported(void)
+{
+	int eax = 0x80000001, ebx = 0, ecx = 0, edx = 0;
+
+	__cpuid(&eax, &ebx, &ecx, &edx);
+
+	if ((edx >> 27) & 1)
+		return true;
+
+	pr_info("<1> rdtscp is not supported.\n");
 	return false;
 }
 
@@ -845,7 +847,7 @@ static void setup_vmcs_memory(void)
 
 	for_each_online_cpu(cpu) {
 		vcpu_ptr = per_cpu_ptr(vcpu, cpu);
-		vmcs_config_ptr = per_cpu_ptr(vmcs_config, cpu);
+		vmcs_config_ptr = per_cpu_ptr(vbh_vmcs_config, cpu);
 
 		vcpu_ptr->vcpu_stack = (u64) kmalloc(16384, GFP_KERNEL);
 		memset((void *)vcpu_ptr->vcpu_stack, 0, 16384);
@@ -885,7 +887,7 @@ static int switch_to_nonroot_per_cpu(void *data)
 
 	vcpu_ptr = this_cpu_ptr(vcpu);
 
-	vmcs_config_ptr = this_cpu_ptr(vmcs_config);
+	vmcs_config_ptr = this_cpu_ptr(vbh_vmcs_config);
 
 	native_store_gdt(this_cpu_ptr(host_gdt));
 
@@ -930,6 +932,8 @@ static int switch_to_nonroot_per_cpu(void *data)
 	vmcs_writel(HOST_RIP,
 			(unsigned long) vmx_switch_and_exit_handle_vmexit);
 
+	pr_info("%s: CPU%d host_rsp 0x%llx\n", __func__, cpu, (vcpu_ptr->vcpu_stack + 16384));
+
 	// guest rip
 	asm("movq $0x681e, %rdx");
 	asm("movq $vmentry_point, %rax");
@@ -937,7 +941,7 @@ static int switch_to_nonroot_per_cpu(void *data)
 
 	pr_err("<1>Ready to call VMLAUNCH.\n");
 
-	asm volatile(__ex(ASM_VMX_VMLAUNCH) "\n\t");
+	asm volatile("vmlaunch \n\t");
 	asm volatile("jbe vmlaunch_fail\n");
 	asm volatile("jmp vmentry_point\n"
 				 "vmlaunch_fail:\n");
@@ -954,7 +958,7 @@ static int switch_to_nonroot_per_cpu(void *data)
 					rflags_value);
 
 	// Read error
-	instruction_error_code = vmcs_readl(VM_INSTRUCTION_ERROR);
+	instruction_error_code = vmcs_read32(VM_INSTRUCTION_ERROR);
 	pr_err("<1> VMLaunch has failed, instruction_error_code=%d\n",
 					instruction_error_code);
 
@@ -988,11 +992,11 @@ int vmx_switch_to_nonroot(void)
 
 	bitmap_zero(switch_done, cpus);
 
-	spin_lock(&vbh_load_lock);
+	//spin_lock(&vbh_load_lock);
 
 	if (vbh_loaded) {
 		pr_err("Warning: vbh is loaded already!\n");
-		spin_unlock(&vbh_load_lock);
+		//spin_unlock(&vbh_load_lock);
 		return -1;
 	}
 
@@ -1009,7 +1013,7 @@ int vmx_switch_to_nonroot(void)
 	}
 
 	vbh_loaded = 1;
-	spin_unlock(&vbh_load_lock);
+	//spin_unlock(&vbh_load_lock);
 
 	pr_err("%s: exit.\n", __func__);
 
@@ -1027,15 +1031,45 @@ pgd_t *init_process_cr3(void)
 	return NULL;
 }
 
+static int setup_config_pages(void)
+{
+	vmx_io_bitmap_a_switch = (unsigned long *)__get_free_page(GFP_KERNEL);
+	if (!vmx_io_bitmap_a_switch) {
+		pr_err("%s: No page for io_bitmap_a\n", __func__);
+		return -ENOMEM;
+	}
+	memset(vmx_io_bitmap_a_switch, 0, PAGE_SIZE);
+
+	vmx_io_bitmap_b_switch = (unsigned long *)__get_free_page(GFP_KERNEL);
+	if (!vmx_io_bitmap_b_switch) {
+		pr_err("%s: No page for io_bitmap_b\n", __func__);
+		return -ENOMEM;
+	}
+	memset(vmx_io_bitmap_b_switch, 0, PAGE_SIZE);
+
+	vmx_msr_bitmap_switch = (unsigned long *)__get_free_page(GFP_KERNEL);
+	if (!vmx_msr_bitmap_switch) {
+		pr_err("%s: No page for msr_bitmap\n", __func__);
+		return -ENOMEM;
+	}
+	memset(vmx_msr_bitmap_switch, 0, PAGE_SIZE);
+
+	return 0;
+}
+
 static int __init cpu_switch_init(void)
 {
+	int cpu;
 	vbh_loaded = 0;
 
 	if (!is_vmx_supported())
 		goto err;
 
-	bitmap_fill((unsigned long *)&all_cpus, num_online_cpus());
+	for_each_online_cpu(cpu) {
+		bitmap_set(all_cpus, cpu, 1);
+	}
 
+	pr_info("%s: all_cpus 0x%lx\n", __func__, all_cpus[0]);
 	vcpu = alloc_percpu(struct vcpu_vmx);
 	if (vcpu == NULL) {
 		pr_err("<1>Cannot allocate memory for vcpu\n");
@@ -1048,14 +1082,19 @@ static int __init cpu_switch_init(void)
 		return -ENOMEM;
 	}
 
-	vmcs_config = alloc_percpu(struct vmcs_config);
-	if (vmcs_config == NULL) {
-		pr_err("<1>Cannot allocate memory for vmcs_config\n");
+	vbh_vmcs_config = alloc_percpu(struct vmcs_config);
+	if (vbh_vmcs_config == NULL) {
+		pr_err("<1>Cannot allocate memory for vbh_vmcs_config\n");
 		return -ENOMEM;
 	}
 
-	pr_err("<1> vcpu=0x%p, host_gdt=0x%p, vmcs_config=0x%p, reg_scratch=0x%p\n",
-			vcpu, host_gdt, vmcs_config,
+	if (setup_config_pages()) {
+		pr_err("<1>Cannot allocate memory for config pages\n");
+		return -ENOMEM;
+	}
+
+	pr_err("<1> vcpu=0x%p, host_gdt=0x%p, vbh_vmcs_config=0x%p, reg_scratch=0x%p\n",
+			vcpu, host_gdt, vbh_vmcs_config,
 			reg_scratch);
 
 	on_each_cpu(setup_vmcs_config, NULL, true);
@@ -1067,7 +1106,12 @@ static int __init cpu_switch_init(void)
 		goto err;
 
 	vmx_eptp_pml4 =  (unsigned long *)__get_free_page(GFP_KERNEL);
-	memset(vmx_eptp_pml4, 0, PAGE_SIZE);
+	if (vmx_eptp_pml4)
+		memset(vmx_eptp_pml4, 0, PAGE_SIZE);
+	else {
+		pr_err("%s: no eptp_pml4\n", __func__);
+		goto err;
+	}
 
 	setup_ept_tables();
 
@@ -1085,7 +1129,7 @@ void unload_vbh_per_cpu(void *info)
 	// Turn off vm
 	if (vmxon_success) {
 		pr_err("<1> kernel_hardening_unload: Ready to send VMXOFF.\n");
-		asm volatile(ASM_VMX_VMXOFF);
+		asm volatile (__ex("vmxoff"));
 	}
 
 	disable_vmxe();
@@ -1108,14 +1152,24 @@ static void cpu_switch_exit(void)
 
 	on_each_cpu(unload_vbh_per_cpu, NULL, true);
 
+	if (vmx_eptp_pml4)
+		free_page((unsigned long)vmx_eptp_pml4);
+
 	if (vcpu != NULL)
 		free_percpu(vcpu);
 
 	if (host_gdt != NULL)
 		free_percpu(host_gdt);
 
-	if (vmcs_config != NULL)
-		free_percpu(vmcs_config);
+	if (vbh_vmcs_config != NULL)
+		free_percpu(vbh_vmcs_config);
+
+	if (vmx_io_bitmap_a_switch)
+		free_page((unsigned long)vmx_io_bitmap_a_switch);
+	if (vmx_io_bitmap_b_switch)
+		free_page((unsigned long)vmx_io_bitmap_b_switch);
+	if (vmx_msr_bitmap_switch)
+		free_page((unsigned long)vmx_msr_bitmap_switch);
 
 	vbh_loaded = 0;
 

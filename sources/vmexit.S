@@ -2,7 +2,6 @@
 #include <asm/dwarf2.h>
 #include <asm/asm.h>
 #include <asm/percpu.h>
-
 #include "offsets.h"
 
 ENTRY(vmx_switch_and_exit_handle_vmexit)
@@ -45,7 +44,7 @@ ENTRY(vmx_switch_and_exit_handle_vmexit)
 	mov 0x08(%rdx), %rcx
 	mov (%rdx), %rdx
 
-	call vmcs_clear
+	call vbh_vmcs_clear
 
 	vmxoff
 
@@ -78,14 +77,14 @@ other_than_vmxoff:
 	mov %r13, (VCPU_REGS_R13*8)(%rcx)
 	mov %r14, (VCPU_REGS_R14*8)(%rcx)
 	mov %r15, (VCPU_REGS_R15*8)(%rcx)
-    mov %cr2, %rax
-    mov %rax, (VCPU_REGS_CR2*8)(%rcx)
+    //mov %cr2, %rax
+    //mov %rax, (VCPU_REGS_CR2*8)(%rcx)
 //call the C part of handler
 	call vmx_switch_and_exit_handler
 //copy values from memory into registers
 	PER_CPU(reg_scratch, %rcx)
-    mov (VCPU_REGS_CR2*8)(%rcx), %rax
-    mov %rax, %cr2
+    //mov (VCPU_REGS_CR2*8)(%rcx), %rax
+    //mov %rax, %cr2
 	mov (VCPU_REGS_RAX*8)(%rcx), %rax
 	mov (VCPU_REGS_RBX*8)(%rcx), %rbx
 	mov (VCPU_REGS_RDX*8)(%rcx), %rdx

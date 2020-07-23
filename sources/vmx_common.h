@@ -228,6 +228,7 @@ struct vcpu_vmx {
     struct vmcs     *vmxarea;
     u64             vcpu_stack;
     unsigned long   *regs;
+    u64 cr2;
     bool            instruction_skipped;
     bool            skip_instruction_not_used;
     struct
@@ -258,6 +259,11 @@ struct vmcs_config {
 	u32 vmexit_ctrl;
 	u32 vmentry_ctrl;
 	u32 vmentry_intr_info_ctrl;
+};
+
+struct vmx_capability {
+	u32 ept;
+	u32 vpid;
 };
 
 #define __ex(x) x
@@ -313,13 +319,18 @@ struct vmcs_config {
 #define VBH_REQ_GUEST_STATE				BIT(7)
 #define VBH_REQ_MODIFY_EXCEPTION_BITMAP	BIT(8)
 
-
+// Latest kernel use asm instructions to replace .byte stream.
+// This time still use .byte stream and will combine with kvm's interfaces.
+#define VBH_ASM_VMX_VMPTRLD_RAX       ".byte 0x0f, 0xc7, 0x30"
+#define VBH_ASM_VMX_VMREAD_RDX_RAX    ".byte 0x0f, 0x78, 0xd0"
+#define VBH_ASM_VMX_VMWRITE_RAX_RDX   ".byte 0x0f, 0x79, 0xd0"
+#define VBH_ASM_VMX_INVEPT            ".byte 0x66, 0x0f,0x38, 0x80, 0x08"
 
 static __always_inline unsigned long __vmcs_readl(unsigned long field)
 {
 	unsigned long value;
 
-	asm volatile(ASM_VMX_VMREAD_RDX_RAX
+	asm volatile(VBH_ASM_VMX_VMREAD_RDX_RAX
 		      : "=a"(value) : "d"(field) : "cc");
 	return value;
 }
@@ -361,7 +372,7 @@ static __always_inline void __vmcs_writel(unsigned long field, unsigned long val
 {
 	u8 error;
 
-	asm volatile(__ex(ASM_VMX_VMWRITE_RAX_RDX) "; setna %0"
+	asm volatile(__ex(VBH_ASM_VMX_VMWRITE_RAX_RDX) "; setna %0"
 		       : "=q"(error) : "a"(value),
 		"d"(field) : "cc");
 	if (unlikely(error))
@@ -396,6 +407,24 @@ static __always_inline void asm_pause_cpu(void)
 {
 	asm volatile("pause" ::: "memory");
 }
+
+static inline u16 kvm_read_ldt(void)
+{
+	u16 ldt;
+	asm("sldt %0" : "=g"(ldt));
+	return ldt;
+}
+
+#ifdef CONFIG_X86_64
+static inline unsigned long read_msr(unsigned long msr)
+{
+	u64 value;
+
+	rdmsrl(msr, value);
+	return value;
+}
+#endif
+
 
 extern unsigned long *vmx_msr_bitmap_switch;
 

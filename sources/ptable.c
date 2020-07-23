@@ -97,7 +97,7 @@ unsigned long *pte_for_address(unsigned long pfn, unsigned long *target_level)
 	}
 
 	// protect ept itself.
-	set_ept_protection();
+	//set_ept_protection();
 
 	return pte;
 }
@@ -160,6 +160,9 @@ void setup_ept_tables(void)
 			break;
 		entry = entry->sibling;
 	}
+
+	// protect ept itself.
+	set_ept_protection();
 }
 
 void dump_entries(u64 gpa)
