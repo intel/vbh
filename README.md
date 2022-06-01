@@ -93,6 +93,6 @@ Feel free to contact project's maintainers.
 
 ## Maintainers
 ```
-rong2.liu@intel.com
+rong.l.liu@intel.com
 sainath.grandhi@intel.com
 ```
